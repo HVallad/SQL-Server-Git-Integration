@@ -128,9 +128,8 @@ async function executeQuery(node: any, query: string): Promise<any[]> {
 			// Use SQL Server authentication from connection string
 			config.user = hasUserCredentials;
 			config.password = hasPassword;
-			delete config.options.trustedConnection;
-			delete config.options.integratedSecurity;
 			console.log('Using SQL Server authentication from connection string:', JSON.stringify({ ...config, password: '***' }, null, 2));
+			
 			const pool = new sql.ConnectionPool(config);
 			await pool.connect();
 			
@@ -140,132 +139,43 @@ async function executeQuery(node: any, query: string): Promise<any[]> {
 			return result.recordset;
 			
 		} else if (hasIntegratedSecurity) {
-			// Use integrated security from connection string
-			config.options.trustedConnection = true;
-			config.options.integratedSecurity = true;
-			delete config.user;
-			delete config.password;
-			console.log('Using integrated security from connection string:', JSON.stringify(config, null, 2));
-			const pool = new sql.ConnectionPool(config);
+			// Windows Authentication is not supported
+			throw new Error('Windows Authentication (Integrated Security) is not supported by this extension. Please use SQL Server Authentication instead.');
+			
+		} else {
+			// No authentication method detected - prompt for SQL Server credentials
+			console.log('No authentication detected, prompting for SQL Server credentials...');
+			
+			const username = await vscode.window.showInputBox({
+				prompt: 'Enter SQL Server username',
+				placeHolder: 'sa'
+			});
+			
+			if (!username) {
+				throw new Error('Username is required for SQL Server authentication');
+			}
+			
+			const password = await vscode.window.showInputBox({
+				prompt: 'Enter SQL Server password',
+				password: true
+			});
+			
+			if (!password) {
+				throw new Error('Password is required for SQL Server authentication');
+			}
+			
+			const sqlConfig = { ...config };
+			sqlConfig.user = username;
+			sqlConfig.password = password;
+			
+			console.log('Using prompted SQL Server credentials:', JSON.stringify({ ...sqlConfig, password: '***' }, null, 2));
+			const pool = new sql.ConnectionPool(sqlConfig);
 			await pool.connect();
 			
 			const result = await pool.request().query(query);
 			await pool.close();
 			
 			return result.recordset;
-			
-		} else {
-			// Try Windows Authentication
-			console.log('Attempting connection with Windows Authentication...');
-			
-			// First attempt: Try with current Windows user
-			try {
-				const windowsConfig = { ...config };
-				
-				// Try multiple Windows auth approaches
-				const authConfigs = [
-					// Approach 1: Use raw connection string (preserves SSPI settings)
-					{ connectionString: connectionString },
-					// Approach 2: Basic trusted connection
-					{ 
-						...windowsConfig,
-						options: { 
-							...windowsConfig.options, 
-							trustedConnection: true 
-						}
-					},
-					// Approach 3: Integrated security
-					{ 
-						...windowsConfig,
-						options: { 
-							...windowsConfig.options, 
-							integratedSecurity: true 
-						}
-					},
-					// Approach 4: Both trusted and integrated
-					{ 
-						...windowsConfig,
-						options: { 
-							...windowsConfig.options, 
-							trustedConnection: true,
-							integratedSecurity: true 
-						}
-					}
-				];
-				
-				for (let i = 0; i < authConfigs.length; i++) {
-					try {
-						console.log(`Trying Windows auth approach ${i + 1}:`, JSON.stringify(authConfigs[i], null, 2));
-						
-						// Declare pool outside the if/else blocks
-						let pool: sql.ConnectionPool;
-						
-						if (authConfigs[i].connectionString) {
-							pool = new sql.ConnectionPool(authConfigs[i]);
-						} else {
-							pool = new sql.ConnectionPool(authConfigs[i]);
-						}
-						
-						await pool.connect();
-						
-						const result = await pool.request().query(query);
-						await pool.close();
-						
-						console.log(`Windows auth approach ${i + 1} succeeded!`);
-						return result.recordset;
-						
-					} catch (authError: any) {
-						console.log(`Windows auth approach ${i + 1} failed:`, authError.message);
-						if (i === authConfigs.length - 1) {
-							throw authError; // Throw the last error if all approaches fail
-						}
-					}
-				}
-				
-				// This should never be reached due to the throw above, but TypeScript needs it
-				throw new Error('All Windows authentication approaches failed');
-				
-			} catch (windowsError: any) {
-				console.log('Windows Authentication failed:', windowsError.message);
-				
-				// Second attempt: Try to prompt for SQL Server credentials
-				const username = await vscode.window.showInputBox({
-					prompt: 'Enter SQL Server username (or leave empty to skip SQL Auth)',
-					placeHolder: 'sa'
-				});
-				
-				if (username) {
-					const password = await vscode.window.showInputBox({
-						prompt: 'Enter SQL Server password',
-						password: true
-					});
-					
-					if (password) {
-						try {
-							const sqlConfig = { ...config };
-							sqlConfig.user = username;
-							sqlConfig.password = password;
-							delete sqlConfig.options.trustedConnection;
-							
-							console.log('SQL auth config:', JSON.stringify({ ...sqlConfig, password: '***' }, null, 2));
-							const pool = new sql.ConnectionPool(sqlConfig);
-							await pool.connect();
-							
-							const result = await pool.request().query(query);
-							await pool.close();
-							
-							return result.recordset;
-							
-						} catch (sqlError: any) {
-							console.log('SQL Authentication failed:', sqlError.message);
-							throw sqlError;
-						}
-					}
-				}
-				
-				// If we get here, both auth methods failed or user cancelled
-				throw windowsError;
-			}
 		}
 		
 	} catch (error: any) {
