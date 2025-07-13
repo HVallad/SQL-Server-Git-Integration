@@ -54,6 +54,17 @@
           "group": "sqlgit@3"
         }
       ]
+    },
+    "configuration": {
+      "title": "SQL Server Git Integration",
+      "properties": {
+        "sqlServerGitIntegration.databaseDirectories": {
+          "type": "object",
+          "default": {},
+          "description": "Directory paths for each database/server combination. Keys are in format 'serverName_databaseName'.",
+          "scope": "application"
+        }
+      }
     }
   },
   "scripts": {

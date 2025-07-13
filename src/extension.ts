@@ -48,6 +48,11 @@ interface DatabaseObject {
 	object_id: number;
 }
 
+// Interface for database directory configuration
+interface DatabaseDirectoryConfig {
+	[key: string]: string; // Key format: "serverName_databaseName", Value: directory path
+}
+
 // Generic method to execute SQL queries with automatic connection handling
 async function executeQuery(node: any, query: string): Promise<any[]> {
 	try {
@@ -184,6 +189,147 @@ async function executeQuery(node: any, query: string): Promise<any[]> {
 	}
 }
 
+// Private function to get server and database names from node
+function getServerDatabaseKey(node: any): { serverName: string, databaseName: string, key: string } | null {
+	try {
+		// Extract server name from URN metadata
+		let serverName = 'localhost';
+		if (node._metadata && node._metadata.urn) {
+			const urnMatch = node._metadata.urn.match(/Server\[@Name='([^']+)'\]/);
+			if (urnMatch) {
+				serverName = urnMatch[1];
+			}
+		}
+
+		// Get database name using MSSQL extension API
+		const mssqlExtension = vscode.extensions.getExtension('ms-mssql.mssql');
+		if (!mssqlExtension || !mssqlExtension.isActive) {
+			console.error('MSSQL extension not available');
+			return null;
+		}
+		
+		const mssqlApi: MssqlExtensionApi = mssqlExtension.exports;
+		const databaseName = mssqlApi.getDatabaseNameFromTreeNode(node);
+		
+		if (!databaseName) {
+			console.error('Could not extract database name from node');
+			return null;
+		}
+
+		// Create a safe key for storage (remove invalid characters)
+		const sanitizedServer = serverName.replace(/[\\/:*?"<>|]/g, '_');
+		const sanitizedDatabase = databaseName.replace(/[\\/:*?"<>|]/g, '_');
+		const key = `${sanitizedServer}_${sanitizedDatabase}`;
+
+		return {
+			serverName,
+			databaseName,
+			key
+		};
+	} catch (error) {
+		console.error('Error extracting server/database info:', error);
+		return null;
+	}
+}
+
+// Private function to prompt user for directory selection and save per database/server
+async function selectAndSaveDatabaseDirectory(node: any): Promise<string | undefined> {
+	try {
+		// Get server and database information
+		const dbInfo = getServerDatabaseKey(node);
+		if (!dbInfo) {
+			vscode.window.showErrorMessage('Could not identify database and server information');
+			return undefined;
+		}
+
+		const { serverName, databaseName, key } = dbInfo;
+
+		// Get current configuration
+		const config = vscode.workspace.getConfiguration('sqlServerGitIntegration');
+		const currentDirectories: DatabaseDirectoryConfig = config.get('databaseDirectories') || {};
+
+		// Check if directory is already configured for this database
+		const existingDirectory = currentDirectories[key];
+		let selectedDirectory: string | undefined;
+
+		if (existingDirectory) {
+			// Show current directory and ask if user wants to change it
+			const choice = await vscode.window.showQuickPick([
+				{
+					label: `Keep Current: ${existingDirectory}`,
+					description: 'Use the existing directory',
+					value: 'keep'
+				},
+				{
+					label: 'Select New Directory',
+					description: 'Choose a different directory',
+					value: 'change'
+				}
+			], {
+				placeHolder: `Directory for ${serverName} - ${databaseName}`,
+				title: 'Database Directory Configuration'
+			});
+
+			if (!choice) {
+				return undefined; // User cancelled
+			}
+
+			if (choice.value === 'keep') {
+				return existingDirectory;
+			}
+		}
+
+		// Prompt user to select a new directory
+		const directoryUri = await vscode.window.showOpenDialog({
+			canSelectFiles: false,
+			canSelectFolders: true,
+			canSelectMany: false,
+			openLabel: 'Select Directory',
+			title: `Select directory for ${serverName} - ${databaseName}`
+		});
+
+		if (!directoryUri || directoryUri.length === 0) {
+			return undefined; // User cancelled
+		}
+
+		selectedDirectory = directoryUri[0].fsPath;
+
+		// Save the directory to configuration
+		currentDirectories[key] = selectedDirectory;
+		await config.update('databaseDirectories', currentDirectories, vscode.ConfigurationTarget.Global);
+
+		console.log(`Saved directory for ${key}: ${selectedDirectory}`);
+		vscode.window.showInformationMessage(
+			`Directory saved for ${serverName} - ${databaseName}: ${selectedDirectory}`
+		);
+
+		return selectedDirectory;
+
+	} catch (error: any) {
+		console.error('Error selecting/saving database directory:', error);
+		vscode.window.showErrorMessage(`Failed to configure directory: ${error.message}`);
+		return undefined;
+	}
+}
+
+// Private function to get saved directory for a database/server combination
+function getSavedDatabaseDirectory(node: any): string | undefined {
+	try {
+		const dbInfo = getServerDatabaseKey(node);
+		if (!dbInfo) {
+			return undefined;
+		}
+
+		const config = vscode.workspace.getConfiguration('sqlServerGitIntegration');
+		const currentDirectories: DatabaseDirectoryConfig = config.get('databaseDirectories') || {};
+		
+		return currentDirectories[dbInfo.key];
+	} catch (error) {
+		console.error('Error getting saved database directory:', error);
+		return undefined;
+	}
+}
+
 // Retrieve database objects using the generic executeQuery method
 async function RetrieveDatabaseObjects(node: any): Promise<DatabaseObject[]> {
 	try {
@@ -238,8 +384,11 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register minimal command handlers for the new menu items
 	const initGitRepoCommand = vscode.commands.registerCommand('sql-server-git-integration.initGitRepo',  async (node) => {
-		const databaseObjects = await RetrieveDatabaseObjects(node);
-		console.log('Database objects:', databaseObjects);
+		//const databaseObjects = await RetrieveDatabaseObjects(node);
+		//console.log('Database objects:', databaseObjects);
+
+		selectAndSaveDatabaseDirectory(node)
+
 		vscode.window.showInformationMessage(`Initialize Git Repository clicked for: ${node?.label || 'Database'}`);
 	});
 
