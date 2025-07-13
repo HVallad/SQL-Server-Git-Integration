@@ -1,6 +1,373 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
+import * as sql from 'mssql';
+
+// Interface for query selection data
+interface ISelectionData {
+	startLine: number;
+	startColumn: number;
+	endLine: number;
+	endColumn: number;
+}
+
+// Interface for execution plan options
+interface ExecutionPlanOptions {
+	includeEstimatedExecutionPlanXml?: boolean;
+	includeActualExecutionPlanXml?: boolean;
+}
+
+// Interface for query execute parameters
+interface QueryExecuteParams {
+	ownerUri: string;
+	executionPlanOptions?: ExecutionPlanOptions;
+	querySelection: ISelectionData;
+}
+
+// Interface for query result
+interface QueryResult {
+	resultSetSummary?: {
+		rowCount: number;
+		columnInfo: any[];
+	};
+	rows?: any[][];
+}
+
+// Interface for MSSQL extension API
+interface MssqlExtensionApi {
+	sendRequest(requestType: any, params: any): Promise<any>;
+	getDatabaseNameFromTreeNode(node: any): string;
+	getConnectionString(connectionUri: string, includePassword: boolean): string;
+}
+
+// Interface for database objects
+interface DatabaseObject {
+	name: string;
+	type: string;
+	schema: string;
+	object_id: number;
+}
+
+/**
+ * Retrieves all database objects from sys.objects for the given database node
+ */
+async function RetrieveDatabaseObjects(node: any): Promise<DatabaseObject[]> {
+	try {
+		// Get the MSSQL extension API
+		const mssqlExtension = vscode.extensions.getExtension('ms-mssql.mssql');
+		if (!mssqlExtension) {
+			throw new Error('MSSQL extension not found');
+		}
+
+		if (!mssqlExtension.isActive) {
+			await mssqlExtension.activate();
+		}
+
+		const mssqlApi: MssqlExtensionApi = mssqlExtension.exports;
+		
+		// Get database name from the tree node
+		const databaseName = mssqlApi.getDatabaseNameFromTreeNode(node);
+		console.log('Database name:', databaseName);
+		
+		// Extract actual server name from URN metadata
+		let actualServerName = 'localhost';
+		if (node._metadata && node._metadata.urn) {
+			const urnMatch = node._metadata.urn.match(/Server\[@Name='([^']+)'\]/);
+			if (urnMatch) {
+				actualServerName = urnMatch[1];
+				console.log('Actual server from URN:', actualServerName);
+			}
+		}
+		
+		// Get connection URI from the node
+		const connectionUri = node._sessionId || node.connectionProfile?.id || node.sessionId;
+		console.log('Connection URI:', connectionUri);
+		
+		if (!connectionUri) {
+			throw new Error('Could not determine connection URI from node');
+		}
+
+		// Get connection string from MSSQL extension
+		const connectionString = await mssqlApi.getConnectionString(connectionUri, true);
+		console.log('Raw connection string:', connectionString);
+		
+		if (!connectionString) {
+			throw new Error('Could not get connection string from MSSQL extension');
+		}
+
+		// Parse the connection string
+		const connectionParams: any = {};
+		connectionString.split(';').forEach(param => {
+			const [key, value] = param.split('=');
+			if (key && value) {
+				connectionParams[key.trim()] = value.trim();
+			}
+		});
+		
+		console.log('Parsed connection parameters:', connectionParams);
+		
+		// Check if connection string already has SQL Server authentication
+		const hasUserCredentials = connectionParams['User ID'] || connectionParams['UID'] || connectionParams['User'];
+		const hasPassword = connectionParams['Password'] || connectionParams['PWD'];
+		const hasIntegratedSecurity = connectionParams['Integrated Security'] === 'True' || connectionParams['Integrated Security'] === 'SSPI';
+		
+		console.log('Authentication detection:', {
+			hasUserCredentials: !!hasUserCredentials,
+			hasPassword: !!hasPassword,
+			hasIntegratedSecurity: hasIntegratedSecurity
+		});
+		
+		// Use the actual server name from URN, with fallback to connection string
+		const serverFromConnectionString = connectionParams['Data Source'] || connectionParams['Server'];
+		const finalServerName = actualServerName !== 'localhost' ? actualServerName : serverFromConnectionString;
+		console.log('Final server name to use:', finalServerName);
+		
+		// Convert to mssql package format
+		const config: any = {
+			server: finalServerName,
+			database: databaseName,
+			connectionTimeout: 1000,
+			requestTimeout: 1000,
+			options: {
+				encrypt: connectionParams['Encrypt'] === 'True',
+				trustServerCertificate: true,
+				enableArithAbort: true
+			}
+		};
+		
+		// Handle server name and port parsing for named instances
+		if (finalServerName && finalServerName.includes('\\')) {
+			// Named instance like "HuntersGamingPC\BOTLANE"
+			const [serverName, instanceName] = finalServerName.split('\\');
+			config.server = serverName;
+			config.options.instanceName = instanceName;
+			console.log('Parsed named instance - Server:', serverName, 'Instance:', instanceName);
+		}
+		
+		// Try different authentication approaches
+		if (hasUserCredentials && hasPassword) {
+			// Use SQL Server authentication from connection string
+			config.user = hasUserCredentials;
+			config.password = hasPassword;
+			delete config.options.trustedConnection;
+			delete config.options.integratedSecurity;
+			console.log('Using SQL Server authentication from connection string:', JSON.stringify({ ...config, password: '***' }, null, 2));
+			const pool = new sql.ConnectionPool(config);
+			await pool.connect();
+			
+			// Execute the query
+			const query = `
+				USE [${databaseName}];
+				SELECT 
+					name,
+					type_desc as type,
+					SCHEMA_NAME(schema_id) as schema,
+					object_id
+				FROM sys.objects 
+				WHERE type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
+				ORDER BY type_desc, name;
+			`;
+			
+			const result = await pool.request().query(query);
+			await pool.close();
+			
+			return result.recordset.map((row: any) => ({
+				name: row.name,
+				type: row.type,
+				schema: row.schema,
+				object_id: row.object_id
+			}));
+			
+		} else if (hasIntegratedSecurity) {
+			// Use integrated security from connection string
+			config.options.trustedConnection = true;
+			config.options.integratedSecurity = true;
+			delete config.user;
+			delete config.password;
+			console.log('Using integrated security from connection string:', JSON.stringify(config, null, 2));
+			const pool = new sql.ConnectionPool(config);
+			await pool.connect();
+			
+			// Execute the query
+			const query = `
+				USE [${databaseName}];
+				SELECT 
+					name,
+					type_desc as type,
+					SCHEMA_NAME(schema_id) as schema,
+					object_id
+				FROM sys.objects 
+				WHERE type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
+				ORDER BY type_desc, name;
+			`;
+			
+			const result = await pool.request().query(query);
+			await pool.close();
+			
+			return result.recordset.map((row: any) => ({
+				name: row.name,
+				type: row.type,
+				schema: row.schema,
+				object_id: row.object_id
+			}));
+			
+		} else {
+			// Try Windows Authentication
+			console.log('Attempting connection with Windows Authentication...');
+			
+			// First attempt: Try with current Windows user
+			try {
+				const windowsConfig = { ...config };
+				
+				// Try multiple Windows auth approaches
+				const authConfigs = [
+					// Approach 1: Use raw connection string (preserves SSPI settings)
+					{ connectionString: connectionString },
+					// Approach 2: Basic trusted connection
+					{ 
+						...windowsConfig,
+						options: { 
+							...windowsConfig.options, 
+							trustedConnection: true 
+						}
+					},
+					// Approach 3: Integrated security
+					{ 
+						...windowsConfig,
+						options: { 
+							...windowsConfig.options, 
+							integratedSecurity: true 
+						}
+					},
+					// Approach 4: Both trusted and integrated
+					{ 
+						...windowsConfig,
+						options: { 
+							...windowsConfig.options, 
+							trustedConnection: true,
+							integratedSecurity: true 
+						}
+					}
+				];
+				
+				for (let i = 0; i < authConfigs.length; i++) {
+					try {
+						console.log(`Trying Windows auth approach ${i + 1}:`, JSON.stringify(authConfigs[i], null, 2));
+						
+						// Declare pool outside the if/else blocks
+						let pool: sql.ConnectionPool;
+						
+						if (authConfigs[i].connectionString) {
+							pool = new sql.ConnectionPool(authConfigs[i]);
+						} else {
+							pool = new sql.ConnectionPool(authConfigs[i]);
+						}
+						
+						await pool.connect();
+						
+						// Execute the query
+						const query = `
+							USE [${databaseName}];
+							SELECT 
+								name,
+								type_desc as type,
+								SCHEMA_NAME(schema_id) as schema,
+								object_id
+							FROM sys.objects 
+							WHERE type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
+							ORDER BY type_desc, name;
+						`;
+						
+						const result = await pool.request().query(query);
+						await pool.close();
+						
+						console.log(`Windows auth approach ${i + 1} succeeded!`);
+						return result.recordset.map((row: any) => ({
+							name: row.name,
+							type: row.type,
+							schema: row.schema,
+							object_id: row.object_id
+						}));
+						
+					} catch (authError: any) {
+						console.log(`Windows auth approach ${i + 1} failed:`, authError.message);
+						if (i === authConfigs.length - 1) {
+							throw authError; // Throw the last error if all approaches fail
+						}
+					}
+				}
+				
+				// This should never be reached due to the throw above, but TypeScript needs it
+				throw new Error('All Windows authentication approaches failed');
+				
+			} catch (windowsError: any) {
+				console.log('Windows Authentication failed:', windowsError.message);
+				
+				// Second attempt: Try to prompt for SQL Server credentials
+				const username = await vscode.window.showInputBox({
+					prompt: 'Enter SQL Server username (or leave empty to skip SQL Auth)',
+					placeHolder: 'sa'
+				});
+				
+				if (username) {
+					const password = await vscode.window.showInputBox({
+						prompt: 'Enter SQL Server password',
+						password: true
+					});
+					
+					if (password) {
+						try {
+							const sqlConfig = { ...config };
+							sqlConfig.user = username;
+							sqlConfig.password = password;
+							delete sqlConfig.options.trustedConnection;
+							
+							console.log('SQL auth config:', JSON.stringify({ ...sqlConfig, password: '***' }, null, 2));
+							const pool = new sql.ConnectionPool(sqlConfig);
+							await pool.connect();
+							
+							// Execute the query
+							const query = `
+								USE [${databaseName}];
+								SELECT 
+									name,
+									type_desc as type,
+									SCHEMA_NAME(schema_id) as schema,
+									object_id
+								FROM sys.objects 
+								WHERE type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
+								ORDER BY type_desc, name;
+							`;
+							
+							const result = await pool.request().query(query);
+							await pool.close();
+							
+							return result.recordset.map((row: any) => ({
+								name: row.name,
+								type: row.type,
+								schema: row.schema,
+								object_id: row.object_id
+							}));
+							
+						} catch (sqlError: any) {
+							console.log('SQL Authentication failed:', sqlError.message);
+							throw sqlError;
+						}
+					}
+				}
+				
+				// If we get here, both auth methods failed or user cancelled
+				throw windowsError;
+			}
+			
+		}
+		
+	} catch (error: any) {
+		console.error('Error retrieving database objects:', error);
+		vscode.window.showErrorMessage(`Failed to retrieve database objects: ${error.message}`);
+		return [];
+	}
+}
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -20,7 +387,8 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	// Register minimal command handlers for the new menu items
-	const initGitRepoCommand = vscode.commands.registerCommand('sql-server-git-integration.initGitRepo', (node) => {
+	const initGitRepoCommand = vscode.commands.registerCommand('sql-server-git-integration.initGitRepo',  async (node) => {
+		const databaseObjects = await RetrieveDatabaseObjects(node);
 		vscode.window.showInformationMessage(`Initialize Git Repository clicked for: ${node?.label || 'Database'}`);
 	});
 
