@@ -236,13 +236,13 @@ function getServerDatabaseKey(node: any): { serverName: string, databaseName: st
 }
 
 // Private function to prompt user for directory selection and save per database/server
-async function selectAndSaveDatabaseDirectory(node: any): Promise<string | undefined> {
+async function selectAndSaveDatabaseDirectory(node: any): Promise<string> {
 	try {
 		// Get server and database information
 		const dbInfo = getServerDatabaseKey(node);
 		if (!dbInfo) {
 			vscode.window.showErrorMessage('Could not identify database and server information');
-			return undefined;
+			return "";
 		}
 
 		const { serverName, databaseName, key } = dbInfo;
@@ -253,7 +253,7 @@ async function selectAndSaveDatabaseDirectory(node: any): Promise<string | undef
 
 		// Check if directory is already configured for this database
 		const existingDirectory = currentDirectories[key];
-		let selectedDirectory: string | undefined;
+		let selectedDirectory: string;
 
 		if (existingDirectory) {
 			// Show current directory and ask if user wants to change it
@@ -274,7 +274,7 @@ async function selectAndSaveDatabaseDirectory(node: any): Promise<string | undef
 			});
 
 			if (!choice) {
-				return undefined; // User cancelled
+				return ""; // User cancelled
 			}
 
 			if (choice.value === 'keep') {
@@ -292,7 +292,7 @@ async function selectAndSaveDatabaseDirectory(node: any): Promise<string | undef
 		});
 
 		if (!directoryUri || directoryUri.length === 0) {
-			return undefined; // User cancelled
+			return ""; // User cancelled
 		}
 
 		selectedDirectory = directoryUri[0].fsPath;
@@ -311,7 +311,7 @@ async function selectAndSaveDatabaseDirectory(node: any): Promise<string | undef
 	} catch (error: any) {
 		console.error('Error selecting/saving database directory:', error);
 		vscode.window.showErrorMessage(`Failed to configure directory: ${error.message}`);
-		return undefined;
+		return "";
 	}
 }
 
@@ -340,13 +340,13 @@ async function RetrieveDatabaseObjects(node: any): Promise<DatabaseObject[]> {
 			SELECT 
 				s.name as SchemaName,
 				o.name as ObjectName, 
-				CASE    WHEN o.type_desc = 'SQL_STORED_PROCEDURE' THEN 'procedure'
-						WHEN o.type_desc = 'SQL_SCALAR_FUNCTION' THEN 'function'
-						WHEN o.type_desc = 'SQL_INLINE_TABLE_VALUED_FUNCTION' THEN 'function'
-						WHEN o.type_desc = 'SQL_TABLE_VALUED_FUNCTION' THEN 'function'
-						WHEN o.type_desc = 'VIEW' THEN 'view'
-						WHEN o.type_desc = 'SQL_TRIGGER' THEN 'trigger'
-						WHEN o.type_desc = 'USER_TABLE' THEN 'table'
+				CASE    WHEN o.type_desc = 'SQL_STORED_PROCEDURE' THEN 'procedures'
+						WHEN o.type_desc = 'SQL_SCALAR_FUNCTION' THEN 'functions'
+						WHEN o.type_desc = 'SQL_INLINE_TABLE_VALUED_FUNCTION' THEN 'functions'
+						WHEN o.type_desc = 'SQL_TABLE_VALUED_FUNCTION' THEN 'functions'
+						WHEN o.type_desc = 'VIEW' THEN 'views'
+						WHEN o.type_desc = 'SQL_TRIGGER' THEN 'triggers'
+						WHEN o.type_desc = 'USER_TABLE' THEN 'tables'
 				END as ObjectType,
 				CAST(m.definition as NVARCHAR(MAX)) AS ObjectDefinition	
 			FROM sys.objects o
@@ -476,7 +476,7 @@ async function setMissingTableDefinitions(node: any, objectList: DatabaseObject[
     console.log(createStmt);
     console.log();
 
-	const dbObject = objectList.find(obj => obj.schema === schema && obj.name === tableName && obj.type === 'table');
+	const dbObject = objectList.find(obj => obj.schema === schema && obj.name === tableName && obj.type === 'tables');
     if (dbObject) {
       dbObject.definition = createStmt;
     }
@@ -504,15 +504,10 @@ async function initializeRepoDirectoryAndFiles(repoDir: string, objectList: Data
 	for (const obj of objectList) {
 		const declaredSchemaDir = path.join(schemaDir, obj.schema, obj.type);
 		if (!fs.existsSync(declaredSchemaDir)) {
-			fs.mkdirSync(declaredSchemaDir);
+			fs.mkdirSync(declaredSchemaDir, {recursive: true});
 		}
-		const filePath = path.join(schemaDir, `${obj.name}.sql`);
+		const filePath = path.join(declaredSchemaDir, `${obj.name}.sql`);
 		fs.writeFileSync(filePath, obj.definition);
-	}
-
-	const securityDir = path.join(controlDir, "security");
-	if (!fs.existsSync(securityDir)) {
-		fs.mkdirSync(securityDir);
 	}
 
 	return true
@@ -541,8 +536,8 @@ export function activate(context: vscode.ExtensionContext) {
 		await setMissingTableDefinitions(node, databaseObjects);
 		console.log('Database objects:', databaseObjects);
 
-		//const repoDir = await selectAndSaveDatabaseDirectory(node)
-
+		const repoDir = await selectAndSaveDatabaseDirectory(node)
+		initializeRepoDirectoryAndFiles(repoDir, databaseObjects)
 
 
 		vscode.window.showInformationMessage(`Initialize Git Repository clicked for: ${node?.label || 'Database'}`);
