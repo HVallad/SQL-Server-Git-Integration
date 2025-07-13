@@ -48,26 +48,13 @@ interface DatabaseObject {
 	object_id: number;
 }
 
-/**
- * Retrieves all database objects from sys.objects for the given database node
- */
-async function RetrieveDatabaseObjects(node: any): Promise<DatabaseObject[]> {
+// Generic method to execute SQL queries with automatic connection handling
+async function executeQuery(node: any, query: string): Promise<any[]> {
 	try {
-		// Get the MSSQL extension API
 		const mssqlExtension = vscode.extensions.getExtension('ms-mssql.mssql');
-		if (!mssqlExtension) {
-			throw new Error('MSSQL extension not found');
-		}
-
-		if (!mssqlExtension.isActive) {
-			await mssqlExtension.activate();
-		}
-
+		if (!mssqlExtension) throw new Error('MSSQL extension not found');
+		if (!mssqlExtension.isActive) await mssqlExtension.activate();
 		const mssqlApi: MssqlExtensionApi = mssqlExtension.exports;
-		
-		// Get database name from the tree node
-		const databaseName = mssqlApi.getDatabaseNameFromTreeNode(node);
-		console.log('Database name:', databaseName);
 		
 		// Extract actual server name from URN metadata
 		let actualServerName = 'localhost';
@@ -75,27 +62,17 @@ async function RetrieveDatabaseObjects(node: any): Promise<DatabaseObject[]> {
 			const urnMatch = node._metadata.urn.match(/Server\[@Name='([^']+)'\]/);
 			if (urnMatch) {
 				actualServerName = urnMatch[1];
-				console.log('Actual server from URN:', actualServerName);
+				console.log('Server from URN:', actualServerName);
 			}
 		}
 		
-		// Get connection URI from the node
 		const connectionUri = node._sessionId || node.connectionProfile?.id || node.sessionId;
-		console.log('Connection URI:', connectionUri);
+		if (!connectionUri) throw new Error('Could not determine connection URI from node');
 		
-		if (!connectionUri) {
-			throw new Error('Could not determine connection URI from node');
-		}
-
-		// Get connection string from MSSQL extension
 		const connectionString = await mssqlApi.getConnectionString(connectionUri, true);
 		console.log('Raw connection string:', connectionString);
 		
-		if (!connectionString) {
-			throw new Error('Could not get connection string from MSSQL extension');
-		}
-
-		// Parse the connection string
+		// Parse connection string parameters
 		const connectionParams: any = {};
 		connectionString.split(';').forEach(param => {
 			const [key, value] = param.split('=');
@@ -120,14 +97,15 @@ async function RetrieveDatabaseObjects(node: any): Promise<DatabaseObject[]> {
 		// Use the actual server name from URN, with fallback to connection string
 		const serverFromConnectionString = connectionParams['Data Source'] || connectionParams['Server'];
 		const finalServerName = actualServerName !== 'localhost' ? actualServerName : serverFromConnectionString;
+		
 		console.log('Final server name to use:', finalServerName);
 		
-		// Convert to mssql package format
+		// Base configuration
 		const config: any = {
 			server: finalServerName,
-			database: databaseName,
-			connectionTimeout: 1000,
-			requestTimeout: 1000,
+			database: connectionParams['Initial Catalog'] || connectionParams['Database'],
+			connectionTimeout: 30000,
+			requestTimeout: 30000,
 			options: {
 				encrypt: connectionParams['Encrypt'] === 'True',
 				trustServerCertificate: true,
@@ -135,13 +113,14 @@ async function RetrieveDatabaseObjects(node: any): Promise<DatabaseObject[]> {
 			}
 		};
 		
-		// Handle server name and port parsing for named instances
+		// Handle named instances
 		if (finalServerName && finalServerName.includes('\\')) {
-			// Named instance like "HuntersGamingPC\BOTLANE"
 			const [serverName, instanceName] = finalServerName.split('\\');
 			config.server = serverName;
-			config.options.instanceName = instanceName;
-			console.log('Parsed named instance - Server:', serverName, 'Instance:', instanceName);
+			if (instanceName) {
+				config.options.instanceName = instanceName;
+				console.log(`Parsed named instance - Server: ${serverName}, Instance: ${instanceName}`);
+			}
 		}
 		
 		// Try different authentication approaches
@@ -155,28 +134,10 @@ async function RetrieveDatabaseObjects(node: any): Promise<DatabaseObject[]> {
 			const pool = new sql.ConnectionPool(config);
 			await pool.connect();
 			
-			// Execute the query
-			const query = `
-				USE [${databaseName}];
-				SELECT 
-					name,
-					type_desc as type,
-					SCHEMA_NAME(schema_id) as schema,
-					object_id
-				FROM sys.objects 
-				WHERE type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
-				ORDER BY type_desc, name;
-			`;
-			
 			const result = await pool.request().query(query);
 			await pool.close();
 			
-			return result.recordset.map((row: any) => ({
-				name: row.name,
-				type: row.type,
-				schema: row.schema,
-				object_id: row.object_id
-			}));
+			return result.recordset;
 			
 		} else if (hasIntegratedSecurity) {
 			// Use integrated security from connection string
@@ -188,28 +149,10 @@ async function RetrieveDatabaseObjects(node: any): Promise<DatabaseObject[]> {
 			const pool = new sql.ConnectionPool(config);
 			await pool.connect();
 			
-			// Execute the query
-			const query = `
-				USE [${databaseName}];
-				SELECT 
-					name,
-					type_desc as type,
-					SCHEMA_NAME(schema_id) as schema,
-					object_id
-				FROM sys.objects 
-				WHERE type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
-				ORDER BY type_desc, name;
-			`;
-			
 			const result = await pool.request().query(query);
 			await pool.close();
 			
-			return result.recordset.map((row: any) => ({
-				name: row.name,
-				type: row.type,
-				schema: row.schema,
-				object_id: row.object_id
-			}));
+			return result.recordset;
 			
 		} else {
 			// Try Windows Authentication
@@ -265,29 +208,11 @@ async function RetrieveDatabaseObjects(node: any): Promise<DatabaseObject[]> {
 						
 						await pool.connect();
 						
-						// Execute the query
-						const query = `
-							USE [${databaseName}];
-							SELECT 
-								name,
-								type_desc as type,
-								SCHEMA_NAME(schema_id) as schema,
-								object_id
-							FROM sys.objects 
-							WHERE type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
-							ORDER BY type_desc, name;
-						`;
-						
 						const result = await pool.request().query(query);
 						await pool.close();
 						
 						console.log(`Windows auth approach ${i + 1} succeeded!`);
-						return result.recordset.map((row: any) => ({
-							name: row.name,
-							type: row.type,
-							schema: row.schema,
-							object_id: row.object_id
-						}));
+						return result.recordset;
 						
 					} catch (authError: any) {
 						console.log(`Windows auth approach ${i + 1} failed:`, authError.message);
@@ -326,28 +251,10 @@ async function RetrieveDatabaseObjects(node: any): Promise<DatabaseObject[]> {
 							const pool = new sql.ConnectionPool(sqlConfig);
 							await pool.connect();
 							
-							// Execute the query
-							const query = `
-								USE [${databaseName}];
-								SELECT 
-									name,
-									type_desc as type,
-									SCHEMA_NAME(schema_id) as schema,
-									object_id
-								FROM sys.objects 
-								WHERE type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
-								ORDER BY type_desc, name;
-							`;
-							
 							const result = await pool.request().query(query);
 							await pool.close();
 							
-							return result.recordset.map((row: any) => ({
-								name: row.name,
-								type: row.type,
-								schema: row.schema,
-								object_id: row.object_id
-							}));
+							return result.recordset;
 							
 						} catch (sqlError: any) {
 							console.log('SQL Authentication failed:', sqlError.message);
@@ -359,8 +266,41 @@ async function RetrieveDatabaseObjects(node: any): Promise<DatabaseObject[]> {
 				// If we get here, both auth methods failed or user cancelled
 				throw windowsError;
 			}
-			
 		}
+		
+	} catch (error: any) {
+		console.error('Error executing query:', error);
+		throw error;
+	}
+}
+
+// Retrieve database objects using the generic executeQuery method
+async function RetrieveDatabaseObjects(node: any): Promise<DatabaseObject[]> {
+	try {
+		const mssqlExtension = vscode.extensions.getExtension('ms-mssql.mssql');
+		if (!mssqlExtension) throw new Error('MSSQL extension not found');
+		if (!mssqlExtension.isActive) await mssqlExtension.activate();
+		const mssqlApi: MssqlExtensionApi = mssqlExtension.exports;
+		const databaseName = mssqlApi.getDatabaseNameFromTreeNode(node);
+		
+		const query = `
+			USE [${databaseName}];
+			SELECT 
+				name,
+				object_id
+			FROM sys.objects 
+			WHERE type IN ('U', 'V', 'P', 'FN', 'IF', 'TF')
+			ORDER BY type_desc, name;
+		`;
+		
+		const results = await executeQuery(node, query);
+		
+		return results.map((row: any) => ({
+			name: row.name,
+			type: row.type,
+			schema: row.schema,
+			object_id: row.object_id
+		}));
 		
 	} catch (error: any) {
 		console.error('Error retrieving database objects:', error);
@@ -389,6 +329,7 @@ export function activate(context: vscode.ExtensionContext) {
 	// Register minimal command handlers for the new menu items
 	const initGitRepoCommand = vscode.commands.registerCommand('sql-server-git-integration.initGitRepo',  async (node) => {
 		const databaseObjects = await RetrieveDatabaseObjects(node);
+		console.log('Database objects:', databaseObjects);
 		vscode.window.showInformationMessage(`Initialize Git Repository clicked for: ${node?.label || 'Database'}`);
 	});
 
