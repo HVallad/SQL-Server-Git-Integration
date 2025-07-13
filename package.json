@@ -1,0 +1,86 @@
+{
+  "name": "sql-server-git-integration",
+  "displayName": "SQL Server Git Integration",
+  "description": "Uses your database connection via MSSQL to create and maintain a repo with your git repo!",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionDependencies": [
+    "ms-mssql.mssql"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "sql-server-git-integration.helloWorld",
+        "title": "Hello World"
+      },
+      {
+        "command": "sql-server-git-integration.initGitRepo",
+        "title": "Initialize Git Repository",
+        "icon": "$(repo-create)"
+      },
+      {
+        "command": "sql-server-git-integration.syncDatabase",
+        "title": "Sync Database to Git",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "sql-server-git-integration.viewGitHistory",
+        "title": "View Git History",
+        "icon": "$(history)"
+      }
+    ],
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "sql-server-git-integration.initGitRepo",
+          "when": "view == objectExplorer && viewItem =~ /\\btype=(Database)\\b/",
+          "group": "sqlgit@1"
+        },
+        {
+          "command": "sql-server-git-integration.syncDatabase",
+          "when": "view == objectExplorer && viewItem =~ /\\btype=(Database)\\b/",
+          "group": "sqlgit@2"
+        },
+        {
+          "command": "sql-server-git-integration.viewGitHistory",
+          "when": "view == objectExplorer && viewItem =~ /\\btype=(Database)\\b/",
+          "group": "sqlgit@3"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.102.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "20.x",
+    "@typescript-eslint/eslint-plugin": "^8.31.1",
+    "@typescript-eslint/parser": "^8.31.1",
+    "eslint": "^9.25.1",
+    "esbuild": "^0.25.3",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.8.3",
+    "@vscode/test-cli": "^0.0.11",
+    "@vscode/test-electron": "^2.5.2"
+  }
+}
