@@ -150,22 +150,19 @@ export function getSavedDatabaseDirectory(node: any): string | undefined {
 	}
 }
 
-export async function initializeRepoDirectoryAndFiles(repoDir: string, objectList: DatabaseObject[], gitCloneURL: string): Promise<boolean>
+export async function initializeRepoDirectoryAndFiles(repoDir: string, objectList: DatabaseObject[]): Promise<boolean>
 {
 	if (!fs.existsSync(repoDir)) {
 		return false;
 	}
 
-    const comparisonDir = path.join(repoDir, "comparison")
-    if (fs.existsSync(comparisonDir))
-    {
-        return false;
-    }
+    const comparisonDir = path.join(repoDir, "DatabaseState")
+    const gitDir = path.join(repoDir, "SourceControlState")
 
-    const gitDir = path.join(repoDir, "versioned")
-    if (fs.existsSync(gitDir) || !gitCloneURL)
+    //return if directories already exist, no need to init it
+    if (fs.existsSync(comparisonDir) && fs.existsSync(gitDir))
     {
-        return true;
+        return true
     }
 
     //setup directory that is going to maintain the state of the actual database

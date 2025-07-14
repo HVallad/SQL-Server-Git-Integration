@@ -23,8 +23,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 		const databaseObjects = await RetrieveDatabaseObjects(node);
 		console.log('Database objects:', databaseObjects);
-		const repoInitialization = initializeRepoDirectoryAndFiles(repoDir, databaseObjects, "temp")
-
+		const repoInitializationResult = initializeRepoDirectoryAndFiles(repoDir, databaseObjects)
 
 		vscode.window.showInformationMessage(`Initialize Git Repository clicked for: ${node?.label || 'Database'}`);
 	});
