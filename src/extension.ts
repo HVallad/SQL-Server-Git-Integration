@@ -3,6 +3,7 @@
 import * as vscode from 'vscode';
 import {RetrieveDatabaseObjects} from './sqlrunner'
 import {selectAndSaveDatabaseDirectory, initializeRepoDirectoryAndFiles} from './dirmanager'
+import { GitManager, GitBranch } from './gitmanagement';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -22,7 +23,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 		const databaseObjects = await RetrieveDatabaseObjects(node);
 		console.log('Database objects:', databaseObjects);
-		initializeRepoDirectoryAndFiles(repoDir, databaseObjects, "")
+		const repoInitialization = initializeRepoDirectoryAndFiles(repoDir, databaseObjects, "temp")
 
 
 		vscode.window.showInformationMessage(`Initialize Git Repository clicked for: ${node?.label || 'Database'}`);
@@ -32,7 +33,7 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.window.showInformationMessage(`Sync Database to Git clicked for: ${node?.label || 'Database'}`);
 	});
 
-	const viewGitHistoryCommand = vscode.commands.registerCommand('sql-server-git-integration.viewGitHistory', (node) => {
+	const viewGitHistoryCommand = vscode.commands.registerCommand('sql-server-git-integration.viewGitHistory', async (node) => {
 		vscode.window.showInformationMessage(`View Git History clicked for: ${node?.label || 'Database'}`);
 	});
 

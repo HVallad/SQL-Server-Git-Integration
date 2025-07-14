@@ -2,6 +2,7 @@ import * as vscode from 'vscode'
 import {getServerDatabaseKey, DatabaseObject} from '../sqlrunner'
 import * as fs from 'fs';
 import * as path from 'path';
+import { GitManager } from '../gitmanagement';
 
 // Interface for database directory configuration
 export interface DatabaseDirectoryConfig {
@@ -90,6 +91,7 @@ export async function selectAndSaveDatabaseDirectory(node: any, context: vscode.
 
                 currentDirectories[key] = databaseRepoPath;
                 await config.update('databaseDirectories', currentDirectories, vscode.ConfigurationTarget.Global);
+                fs.mkdirSync(currentDirectories[key], { recursive: true})
                 return currentDirectories[key]
             }
 
@@ -117,7 +119,7 @@ export async function selectAndSaveDatabaseDirectory(node: any, context: vscode.
                 vscode.window.showInformationMessage(
                     `Directory saved for ${serverName} - ${databaseName}: ${selectedDirectory}`
                 );
-
+                fs.mkdirSync(currentDirectories[key], { recursive: true})
                 return currentDirectories[key];
             }
 
@@ -163,7 +165,7 @@ export async function initializeRepoDirectoryAndFiles(repoDir: string, objectLis
     const gitDir = path.join(repoDir, "versioned")
     if (fs.existsSync(gitDir) || !gitCloneURL)
     {
-        return false;
+        return true;
     }
 
     //setup directory that is going to maintain the state of the actual database
@@ -177,7 +179,7 @@ export async function initializeRepoDirectoryAndFiles(repoDir: string, objectLis
 	}
 
     //setup directory for git repository
-    
+    const result = GitManager.promptAndCloneRepositoryWithBranchSelection(gitDir)
 
 	return true
 }
