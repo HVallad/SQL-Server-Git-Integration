@@ -8,6 +8,9 @@ import { DatabaseSourceControlProvider } from './sourcecontrol/databaseSourceCon
 import * as path from 'path';
 import * as fs from 'fs';
 
+// Add this at the top level of the extension
+let currentSourceControlProvider: DatabaseSourceControlProvider | undefined;
+
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 export function activate(context: vscode.ExtensionContext) {
@@ -38,6 +41,12 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const dbSourceControlCommand = vscode.commands.registerCommand('sql-server-git-integration.dbSourceControl', async (node) => {
 		try {
+			// Dispose of previous provider if it exists
+			if (currentSourceControlProvider) {
+				currentSourceControlProvider.dispose();
+				currentSourceControlProvider = undefined;
+			}
+
 			// Get the directory using the database node as key
 			const savedDirectory = getDatabaseDirectoryFromNode(node, context);
 			if (!savedDirectory) {
@@ -54,7 +63,7 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			// Create source control provider
-			const sourceControlProvider = new DatabaseSourceControlProvider(gitDir, context.extensionUri, context);
+			currentSourceControlProvider = new DatabaseSourceControlProvider(gitDir, context.extensionUri, context);
 
 			// Show the source control view
 			vscode.commands.executeCommand('workbench.view.scm');
@@ -79,4 +88,9 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 }
 
-export function deactivate() {}
+// Also dispose when the extension deactivates
+export function deactivate() {
+	if (currentSourceControlProvider) {
+		currentSourceControlProvider.dispose();
+	}
+}
