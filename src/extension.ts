@@ -54,7 +54,7 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 
 			// Create source control provider
-			const sourceControlProvider = new DatabaseSourceControlProvider(gitDir, context.extensionUri);
+			const sourceControlProvider = new DatabaseSourceControlProvider(gitDir, context.extensionUri, context);
 
 			// Show the source control view
 			vscode.commands.executeCommand('workbench.view.scm');

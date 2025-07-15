@@ -10,10 +10,13 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
     private _gitDir: string;
     private _tempDir: string;
     private _gitCache: Map<string, string> = new Map();
+    private _instanceId: string; // Add unique instance ID
 
-    constructor(gitDir: string, extensionUri: vscode.Uri) {
+    constructor(gitDir: string, extensionUri: vscode.Uri, context: vscode.ExtensionContext) {
         this._gitDir = gitDir;
-        this._tempDir = path.join(extensionUri.fsPath, 'temp');
+        // Use extension global storage for temp files
+        this._tempDir = path.join(context.globalStorageUri.fsPath, 'git-temp');
+        this._instanceId = Date.now().toString(); // Generate unique ID
         
         // Create source control instance
         this._sourceControl = vscode.scm.createSourceControl('sqlServerGitIntegration', 'Database Source Control');
@@ -28,23 +31,23 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
         // Register commands
         this._registerCommands();
         
-        // Initial update
+        // Initial update and pre-fetch Git files
         this._update();
     }
 
     private _registerCommands() {
-        // Commit command
-        const commitCommand = vscode.commands.registerCommand('sqlServerGitIntegration.commit', () => {
+        // Use unique command IDs with instance ID
+        const commitCommand = vscode.commands.registerCommand(`sqlServerGitIntegration.commit.${this._instanceId}`, () => {
             this._commit();
         });
 
         // Refresh command
-        const refreshCommand = vscode.commands.registerCommand('sqlServerGitIntegration.refresh', () => {
+        const refreshCommand = vscode.commands.registerCommand(`sqlServerGitIntegration.refresh.${this._instanceId}`, () => {
             this._update();
         });
 
         // View diff command
-        const viewDiffCommand = vscode.commands.registerCommand('sqlServerGitIntegration.viewDiff', async (uri: vscode.Uri) => {
+        const viewDiffCommand = vscode.commands.registerCommand(`sqlServerGitIntegration.viewDiff.${this._instanceId}`, async (uri: vscode.Uri) => {
             try {
                 const originalUri = await this.provideOriginalResource(uri);
                 if (originalUri) {
@@ -58,6 +61,50 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
         this._disposables.push(commitCommand, refreshCommand, viewDiffCommand);
     }
 
+    // Pre-fetch all Git files for changed files
+    private async _prefetchGitFiles(changedFiles: string[]) {
+        try {
+            // Create temp directory if it doesn't exist
+            if (!fs.existsSync(this._tempDir)) {
+                fs.mkdirSync(this._tempDir, { recursive: true });
+            }
+
+            // Clear existing temp files
+            if (fs.existsSync(this._tempDir)) {
+                fs.rmSync(this._tempDir, { recursive: true, force: true });
+                fs.mkdirSync(this._tempDir, { recursive: true });
+            }
+
+            const originalCwd = process.cwd();
+            process.chdir(this._gitDir);
+
+            try {
+                // Pre-fetch all changed files from Git
+                for (const file of changedFiles) {
+                    const gitPath = file.replace(/\\/g, '/');
+                    const result = await GitManager.executeCommand(`git cat-file blob HEAD:"${gitPath}"`);
+                    
+                    if (result.success) {
+                        // Create temp file with same structure as original
+                        const tempFilePath = path.join(this._tempDir, gitPath);
+                        const tempDir = path.dirname(tempFilePath);
+                        
+                        if (!fs.existsSync(tempDir)) {
+                            fs.mkdirSync(tempDir, { recursive: true });
+                        }
+                        
+                        fs.writeFileSync(tempFilePath, result.output || '');
+                        this._gitCache.set(gitPath, result.output || '');
+                    }
+                }
+            } finally {
+                process.chdir(originalCwd);
+            }
+        } catch (error) {
+            console.error('Error pre-fetching Git files:', error);
+        }
+    }
+
     // Implement QuickDiffProvider interface
     public async provideOriginalResource(uri: vscode.Uri): Promise<vscode.Uri | undefined> {
         try {
@@ -67,7 +114,13 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
             // Convert to forward slashes for Git
             const gitPath = relativePath.replace(/\\/g, '/');
             
-            // Check cache first
+            // Check if we have a pre-fetched file
+            const tempFilePath = path.join(this._tempDir, gitPath);
+            if (fs.existsSync(tempFilePath)) {
+                return vscode.Uri.file(tempFilePath);
+            }
+            
+            // Fallback to cache
             if (this._gitCache.has(gitPath)) {
                 const content = this._gitCache.get(gitPath)!;
                 const fileName = path.basename(relativePath);
@@ -76,32 +129,6 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
                 return vscode.Uri.file(tempFile);
             }
             
-            // Create temp directory if it doesn't exist
-            if (!fs.existsSync(this._tempDir)) {
-                fs.mkdirSync(this._tempDir, { recursive: true });
-            }
-            
-            // Create a unique temp file name
-            const fileName = path.basename(relativePath);
-            const tempFile = path.join(this._tempDir, `${fileName}.git`);
-            
-            // Use git cat-file which is much faster than git show
-            const originalCwd = process.cwd();
-            process.chdir(this._gitDir);
-
-            try {
-                const result = await GitManager.executeCommand(`git cat-file blob HEAD:"${gitPath}"`);
-                
-                if (result.success) {
-                    const content = result.output || '';
-                    // Cache the result
-                    this._gitCache.set(gitPath, content);
-                    fs.writeFileSync(tempFile, content);
-                    return vscode.Uri.file(tempFile);
-                }
-            } finally {
-                process.chdir(originalCwd);
-            }
         } catch (error) {
             console.error('Error providing original resource:', error);
         }
@@ -122,11 +149,15 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
                 
                 if (statusResult.success && statusResult.output) {
                     const changedFiles = this._parseGitStatus(statusResult.output);
+                    
+                    // Pre-fetch all Git files
+                    await this._prefetchGitFiles(changedFiles);
+                    
                     const resourceStates = changedFiles.map(file => ({
                         resourceUri: vscode.Uri.file(path.join(this._gitDir, file)),
                         command: {
                             title: 'View Changes',
-                            command: 'sqlServerGitIntegration.viewDiff',
+                            command: `sqlServerGitIntegration.viewDiff.${this._instanceId}`, // Use unique command ID
                             arguments: [vscode.Uri.file(path.join(this._gitDir, file))]
                         },
                         decorations: {
@@ -161,12 +192,10 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
     }
 
     private _getStatusTooltip(filename: string): string {
-        // You could enhance this to show more detailed status
         return 'Modified';
     }
 
     private _getStatusIcon(filename: string): string {
-        // You could enhance this to show different icons based on status
         return 'modified';
     }
 
