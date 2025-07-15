@@ -25,10 +25,15 @@ export function activate(context: vscode.ExtensionContext) {
 		console.log('Database objects:', databaseObjects);
 		const repoInitializationResult = initializeRepoDirectoryAndFiles(repoDir, databaseObjects)
 
+		if (!repoInitializationResult) {
+			vscode.window.showErrorMessage('Failed to initialize Git repository');
+			return false;
+		}
+
 		vscode.window.showInformationMessage(`Initialize Git Repository clicked for: ${node?.label || 'Database'}`);
 	});
 
-	const syncDatabaseCommand = vscode.commands.registerCommand('sql-server-git-integration.syncDatabase', (node) => {
+	const dbSourceControlCommand = vscode.commands.registerCommand('sql-server-git-integration.dbSourceControl', (node) => {
 		vscode.window.showInformationMessage(`Sync Database to Git clicked for: ${node?.label || 'Database'}`);
 	});
 
@@ -39,7 +44,7 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		disposable,
 		initGitRepoCommand,
-		syncDatabaseCommand,
+		dbSourceControlCommand,
 		viewGitHistoryCommand
 	);
 }

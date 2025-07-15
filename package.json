@@ -26,8 +26,8 @@
         "icon": "$(repo-create)"
       },
       {
-        "command": "sql-server-git-integration.syncDatabase",
-        "title": "Sync Database to Git",
+        "command": "sql-server-git-integration.dbSourceControl",
+        "title": "Open Database Source Control",
         "icon": "$(sync)"
       },
       {
@@ -44,7 +44,7 @@
           "group": "sqlgit@1"
         },
         {
-          "command": "sql-server-git-integration.syncDatabase",
+          "command": "sql-server-git-integration.dbSourceControl",
           "when": "view == objectExplorer && viewItem =~ /\\btype=(Database)\\b/",
           "group": "sqlgit@2"
         },
