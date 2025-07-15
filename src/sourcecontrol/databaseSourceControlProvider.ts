@@ -3,17 +3,20 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { GitManager } from '../gitmanagement';
 
-export class DatabaseSourceControlProvider {
+export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
     private _disposables: vscode.Disposable[] = [];
     private _sourceControl: vscode.SourceControl;
     private _resourceGroup: vscode.SourceControlResourceGroup;
     private _gitDir: string;
+    private _tempDir: string;
 
-    constructor(gitDir: string) {
+    constructor(gitDir: string, extensionUri: vscode.Uri) {
         this._gitDir = gitDir;
+        this._tempDir = path.join(extensionUri.fsPath, 'temp');
         
         // Create source control instance
         this._sourceControl = vscode.scm.createSourceControl('sqlServerGitIntegration', 'Database Source Control');
+        this._sourceControl.quickDiffProvider = this;
         
         // Create resource group
         this._resourceGroup = this._sourceControl.createResourceGroup('changes', 'Changes');
@@ -39,7 +42,19 @@ export class DatabaseSourceControlProvider {
             this._update();
         });
 
-        this._disposables.push(commitCommand, refreshCommand);
+        // View diff command
+        const viewDiffCommand = vscode.commands.registerCommand('sqlServerGitIntegration.viewDiff', async (uri: vscode.Uri) => {
+            try {
+                const originalUri = await this.provideOriginalResource(uri);
+                if (originalUri) {
+                    await vscode.commands.executeCommand('vscode.diff', originalUri, uri, `${path.basename(uri.fsPath)} (Git HEAD vs Current)`);
+                }
+            } catch (error) {
+                console.error('Error opening diff:', error);
+            }
+        });
+
+        this._disposables.push(commitCommand, refreshCommand, viewDiffCommand);
     }
 
     private async _update() {
@@ -57,8 +72,8 @@ export class DatabaseSourceControlProvider {
                     const resourceStates = changedFiles.map(file => ({
                         resourceUri: vscode.Uri.file(path.join(this._gitDir, file)),
                         command: {
-                            title: 'Open File',
-                            command: 'vscode.open',
+                            title: 'View Changes',
+                            command: 'sqlServerGitIntegration.viewDiff',
                             arguments: [vscode.Uri.file(path.join(this._gitDir, file))]
                         },
                         decorations: {
@@ -133,7 +148,51 @@ export class DatabaseSourceControlProvider {
         }
     }
 
+    // Implement QuickDiffProvider interface
+    public async provideOriginalResource(uri: vscode.Uri): Promise<vscode.Uri | undefined> {
+        try {
+            // Get the relative path from the git directory
+            const relativePath = path.relative(this._gitDir, uri.fsPath);
+            
+            // Convert to forward slashes for Git
+            const gitPath = relativePath.replace(/\\/g, '/');
+            
+            // Create temp directory if it doesn't exist
+            if (!fs.existsSync(this._tempDir)) {
+                fs.mkdirSync(this._tempDir, { recursive: true });
+            }
+            
+            // Create a unique temp file name
+            const fileName = path.basename(relativePath);
+            const tempFile = path.join(this._tempDir, `${fileName}.git`);
+            
+            // Use git cat-file which is much faster than git show
+            const originalCwd = process.cwd();
+            process.chdir(this._gitDir);
+
+            try {
+                const result = await GitManager.executeCommand(`git cat-file blob HEAD:"${gitPath}"`);
+                
+                if (result.success) {
+                    fs.writeFileSync(tempFile, result.output || '');
+                    return vscode.Uri.file(tempFile);
+                }
+            } finally {
+                process.chdir(originalCwd);
+            }
+        } catch (error) {
+            console.error('Error providing original resource:', error);
+        }
+        
+        return undefined;
+    }
+
     public dispose() {
+        // Clean up temp files
+        if (fs.existsSync(this._tempDir)) {
+            fs.rmSync(this._tempDir, { recursive: true, force: true });
+        }
+        
         this._disposables.forEach(d => d.dispose());
         this._sourceControl.dispose();
     }
