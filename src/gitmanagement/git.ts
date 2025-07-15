@@ -404,7 +404,7 @@ export class GitManager {
     /**
      * Execute a shell command
      */
-    private static executeCommand(command: string): Promise<{ success: boolean; output?: string; error?: string }> {
+    public static async executeCommand(command: string): Promise<{ success: boolean; output?: string; error?: string }> {
         return new Promise((resolve) => {
             child_process.exec(command, { maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
                 if (error) {
