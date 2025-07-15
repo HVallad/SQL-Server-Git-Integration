@@ -9,6 +9,7 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
     private _resourceGroup: vscode.SourceControlResourceGroup;
     private _gitDir: string;
     private _tempDir: string;
+    private _gitCache: Map<string, string> = new Map();
 
     constructor(gitDir: string, extensionUri: vscode.Uri) {
         this._gitDir = gitDir;
@@ -57,7 +58,59 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
         this._disposables.push(commitCommand, refreshCommand, viewDiffCommand);
     }
 
+    // Implement QuickDiffProvider interface
+    public async provideOriginalResource(uri: vscode.Uri): Promise<vscode.Uri | undefined> {
+        try {
+            // Get the relative path from the git directory
+            const relativePath = path.relative(this._gitDir, uri.fsPath);
+            
+            // Convert to forward slashes for Git
+            const gitPath = relativePath.replace(/\\/g, '/');
+            
+            // Check cache first
+            if (this._gitCache.has(gitPath)) {
+                const content = this._gitCache.get(gitPath)!;
+                const fileName = path.basename(relativePath);
+                const tempFile = path.join(this._tempDir, `${fileName}.git`);
+                fs.writeFileSync(tempFile, content);
+                return vscode.Uri.file(tempFile);
+            }
+            
+            // Create temp directory if it doesn't exist
+            if (!fs.existsSync(this._tempDir)) {
+                fs.mkdirSync(this._tempDir, { recursive: true });
+            }
+            
+            // Create a unique temp file name
+            const fileName = path.basename(relativePath);
+            const tempFile = path.join(this._tempDir, `${fileName}.git`);
+            
+            // Use git cat-file which is much faster than git show
+            const originalCwd = process.cwd();
+            process.chdir(this._gitDir);
+
+            try {
+                const result = await GitManager.executeCommand(`git cat-file blob HEAD:"${gitPath}"`);
+                
+                if (result.success) {
+                    const content = result.output || '';
+                    // Cache the result
+                    this._gitCache.set(gitPath, content);
+                    fs.writeFileSync(tempFile, content);
+                    return vscode.Uri.file(tempFile);
+                }
+            } finally {
+                process.chdir(originalCwd);
+            }
+        } catch (error) {
+            console.error('Error providing original resource:', error);
+        }
+        
+        return undefined;
+    }
+
     private async _update() {
+        this._gitCache.clear(); // Clear cache on update
         try {
             // Change to git directory
             const originalCwd = process.cwd();
@@ -146,45 +199,6 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
             console.error('Error committing changes:', error);
             vscode.window.showErrorMessage(`Failed to commit changes: ${error}`);
         }
-    }
-
-    // Implement QuickDiffProvider interface
-    public async provideOriginalResource(uri: vscode.Uri): Promise<vscode.Uri | undefined> {
-        try {
-            // Get the relative path from the git directory
-            const relativePath = path.relative(this._gitDir, uri.fsPath);
-            
-            // Convert to forward slashes for Git
-            const gitPath = relativePath.replace(/\\/g, '/');
-            
-            // Create temp directory if it doesn't exist
-            if (!fs.existsSync(this._tempDir)) {
-                fs.mkdirSync(this._tempDir, { recursive: true });
-            }
-            
-            // Create a unique temp file name
-            const fileName = path.basename(relativePath);
-            const tempFile = path.join(this._tempDir, `${fileName}.git`);
-            
-            // Use git cat-file which is much faster than git show
-            const originalCwd = process.cwd();
-            process.chdir(this._gitDir);
-
-            try {
-                const result = await GitManager.executeCommand(`git cat-file blob HEAD:"${gitPath}"`);
-                
-                if (result.success) {
-                    fs.writeFileSync(tempFile, result.output || '');
-                    return vscode.Uri.file(tempFile);
-                }
-            } finally {
-                process.chdir(originalCwd);
-            }
-        } catch (error) {
-            console.error('Error providing original resource:', error);
-        }
-        
-        return undefined;
     }
 
     public dispose() {
