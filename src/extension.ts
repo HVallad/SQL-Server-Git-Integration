@@ -2,8 +2,11 @@
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
 import {RetrieveDatabaseObjects} from './sqlrunner'
-import {selectAndSaveDatabaseDirectory, initializeRepoDirectoryAndFiles} from './dirmanager'
+import {selectAndSaveDatabaseDirectory, initializeRepoDirectoryAndFiles, getDatabaseDirectoryFromNode} from './dirmanager'
 import { GitManager, GitBranch } from './gitmanagement';
+import { DatabaseSourceControlProvider } from './sourcecontrol/databaseSourceControlProvider';
+import * as path from 'path';
+import * as fs from 'fs';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -33,8 +36,35 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.window.showInformationMessage(`Initialize Git Repository clicked for: ${node?.label || 'Database'}`);
 	});
 
-	const dbSourceControlCommand = vscode.commands.registerCommand('sql-server-git-integration.dbSourceControl', (node) => {
-		vscode.window.showInformationMessage(`Sync Database to Git clicked for: ${node?.label || 'Database'}`);
+	const dbSourceControlCommand = vscode.commands.registerCommand('sql-server-git-integration.dbSourceControl', async (node) => {
+		try {
+			// Get the directory using the database node as key
+			const savedDirectory = getDatabaseDirectoryFromNode(node, context);
+			if (!savedDirectory) {
+				vscode.window.showErrorMessage('Could not determine directory for this database.');
+				return;
+			}
+
+			// Check if the repository is properly initialized
+			const gitDir = path.join(savedDirectory, "SourceControlState");
+			
+			if (!fs.existsSync(gitDir)) {
+				vscode.window.showErrorMessage('Repository not properly initialized. Please run "Initialize Git Repository" first.');
+				return;
+			}
+
+			// Create source control provider
+			const sourceControlProvider = new DatabaseSourceControlProvider(gitDir);
+
+			// Show the source control view
+			vscode.commands.executeCommand('workbench.view.scm');
+
+			vscode.window.showInformationMessage(`Source control opened for: ${node?.label || 'Database'}`);
+
+		} catch (error) {
+			console.error('Error opening source control:', error);
+			vscode.window.showErrorMessage(`Failed to open source control: ${error}`);
+		}
 	});
 
 	const viewGitHistoryCommand = vscode.commands.registerCommand('sql-server-git-integration.viewGitHistory', async (node) => {

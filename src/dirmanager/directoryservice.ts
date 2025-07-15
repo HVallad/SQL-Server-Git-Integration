@@ -150,6 +150,42 @@ export function getSavedDatabaseDirectory(node: any): string | undefined {
 	}
 }
 
+// New method to get directory using database node as key
+export function getDatabaseDirectoryFromNode(node: any, context: vscode.ExtensionContext): string | undefined {
+    try {
+        const dbInfo = getServerDatabaseKey(node);
+        if (!dbInfo) {
+            return undefined;
+        }
+
+        const config = vscode.workspace.getConfiguration('sqlServerGitIntegration');
+        const currentDirectories: DatabaseDirectoryConfig = config.get('databaseDirectories') || {};
+        
+        // Check if directory is already configured
+        const existingDirectory = currentDirectories[dbInfo.key];
+        if (existingDirectory) {
+            return existingDirectory;
+        }
+
+        // If not configured, create auto directory
+        const autoDirectory = path.join(getExtensionGlobalPath(context), dbInfo.key);
+        
+        // Save it to configuration
+        currentDirectories[dbInfo.key] = autoDirectory;
+        config.update('databaseDirectories', currentDirectories, vscode.ConfigurationTarget.Global);
+        
+        // Create directory if it doesn't exist
+        if (!fs.existsSync(autoDirectory)) {
+            fs.mkdirSync(autoDirectory, { recursive: true });
+        }
+        
+        return autoDirectory;
+    } catch (error) {
+        console.error('Error getting database directory from node:', error);
+        return undefined;
+    }
+}
+
 export async function initializeRepoDirectoryAndFiles(repoDir: string, objectList: DatabaseObject[]): Promise<boolean>
 {
 	if (!fs.existsSync(repoDir)) {
