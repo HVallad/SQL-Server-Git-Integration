@@ -402,12 +402,13 @@ export class GitManager {
     }
     
     /**
-     * Execute a shell command
+     * Execute a git command and return the result
      */
-    private static executeCommand(command: string): Promise<{ success: boolean; output?: string; error?: string }> {
+    static async executeCommand(command: string): Promise<{ success: boolean; output?: string; error?: string }> {
         return new Promise((resolve) => {
-            child_process.exec(command, { maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+            child_process.exec(command, { cwd: process.cwd() }, (error, stdout, stderr) => {
                 if (error) {
+                    console.error(`Error executing command: ${command}`, error);
                     resolve({
                         success: false,
                         error: error.message || stderr || 'Unknown error'
@@ -415,7 +416,7 @@ export class GitManager {
                 } else {
                     resolve({
                         success: true,
-                        output: stdout
+                        output: stdout.trim()
                     });
                 }
             });
