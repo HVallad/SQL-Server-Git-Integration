@@ -80,11 +80,75 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.window.showInformationMessage(`View Git History clicked for: ${node?.label || 'Database'}`);
 	});
 
+	// Static commands that delegate to the current source control provider
+	const stageFileCommand = vscode.commands.registerCommand('sql-server-git-integration.stageFile', async (resourceState?: any) => {
+		console.log('stageFile command called with resourceState:', resourceState);
+		if (currentSourceControlProvider) {
+			// Try to get URI from different possible sources
+			let uri: vscode.Uri | undefined;
+			if (resourceState?.resourceUri) {
+				uri = resourceState.resourceUri;
+			} else if (resourceState && typeof resourceState.fsPath === 'string') {
+				uri = resourceState;
+			}
+			console.log('Resolved URI:', uri);
+			await vscode.commands.executeCommand(`sqlServerGitIntegration.stageFile.${currentSourceControlProvider.instanceId}`, uri);
+		} else {
+			vscode.window.showErrorMessage('No active source control provider');
+		}
+	});
+
+	const unstageFileCommand = vscode.commands.registerCommand('sql-server-git-integration.unstageFile', async (resourceState?: any) => {
+		console.log('unstageFile command called with resourceState:', resourceState);
+		if (currentSourceControlProvider) {
+			// Try to get URI from different possible sources
+			let uri: vscode.Uri | undefined;
+			if (resourceState?.resourceUri) {
+				uri = resourceState.resourceUri;
+			} else if (resourceState && typeof resourceState.fsPath === 'string') {
+				uri = resourceState;
+			}
+			console.log('Resolved URI:', uri);
+			await vscode.commands.executeCommand(`sqlServerGitIntegration.unstageFile.${currentSourceControlProvider.instanceId}`, uri);
+		} else {
+			vscode.window.showErrorMessage('No active source control provider');
+		}
+	});
+
+	const stageAllCommand = vscode.commands.registerCommand('sql-server-git-integration.stageAll', async () => {
+		if (currentSourceControlProvider) {
+			await vscode.commands.executeCommand(`sqlServerGitIntegration.stageAll.${currentSourceControlProvider.instanceId}`);
+		} else {
+			vscode.window.showErrorMessage('No active source control provider');
+		}
+	});
+
+	const unstageAllCommand = vscode.commands.registerCommand('sql-server-git-integration.unstageAll', async () => {
+		if (currentSourceControlProvider) {
+			await vscode.commands.executeCommand(`sqlServerGitIntegration.unstageAll.${currentSourceControlProvider.instanceId}`);
+		} else {
+			vscode.window.showErrorMessage('No active source control provider');
+		}
+	});
+
+	const refreshCommand = vscode.commands.registerCommand('sql-server-git-integration.refresh', async () => {
+		if (currentSourceControlProvider) {
+			await vscode.commands.executeCommand(`sqlServerGitIntegration.refresh.${currentSourceControlProvider.instanceId}`);
+		} else {
+			vscode.window.showErrorMessage('No active source control provider');
+		}
+	});
+
 	context.subscriptions.push(
 		disposable,
 		initGitRepoCommand,
 		dbSourceControlCommand,
-		viewGitHistoryCommand
+		viewGitHistoryCommand,
+		stageFileCommand,
+		unstageFileCommand,
+		stageAllCommand,
+		unstageAllCommand,
+		refreshCommand
 	);
 }
 

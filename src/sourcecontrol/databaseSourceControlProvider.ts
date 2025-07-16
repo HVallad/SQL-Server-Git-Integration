@@ -6,7 +6,8 @@ import { GitManager } from '../gitmanagement';
 export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
     private _disposables: vscode.Disposable[] = [];
     private _sourceControl: vscode.SourceControl;
-    private _resourceGroup: vscode.SourceControlResourceGroup;
+    private _changesGroup: vscode.SourceControlResourceGroup;
+    private _stagedGroup: vscode.SourceControlResourceGroup;
     private _gitDir: string;
     private _tempDir: string;
     private _gitCache: Map<string, string> = new Map();
@@ -22,8 +23,9 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
         this._sourceControl = vscode.scm.createSourceControl('sqlServerGitIntegration', 'Database Source Control');
         this._sourceControl.quickDiffProvider = this;
         
-        // Create resource group
-        this._resourceGroup = this._sourceControl.createResourceGroup('changes', 'Changes');
+        // Create resource groups
+        this._stagedGroup = this._sourceControl.createResourceGroup('staged', 'Staged Changes');
+        this._changesGroup = this._sourceControl.createResourceGroup('changes', 'Changes');
         
         // Set up input box
         this._sourceControl.inputBox.placeholder = 'Message (press Ctrl+Enter to commit)';
@@ -33,6 +35,10 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
         
         // Initial update and pre-fetch Git files
         this._update();
+    }
+
+    public get instanceId(): string {
+        return this._instanceId;
     }
 
     private _registerCommands() {
@@ -58,7 +64,27 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
             }
         });
 
-        this._disposables.push(commitCommand, refreshCommand, viewDiffCommand);
+        // Stage single file command
+        const stageFileCommand = vscode.commands.registerCommand(`sqlServerGitIntegration.stageFile.${this._instanceId}`, async (uri: vscode.Uri) => {
+            await this._stageFile(uri);
+        });
+
+        // Stage all files command
+        const stageAllCommand = vscode.commands.registerCommand(`sqlServerGitIntegration.stageAll.${this._instanceId}`, async () => {
+            await this._stageAll();
+        });
+
+        // Unstage single file command
+        const unstageFileCommand = vscode.commands.registerCommand(`sqlServerGitIntegration.unstageFile.${this._instanceId}`, async (uri: vscode.Uri) => {
+            await this._unstageFile(uri);
+        });
+
+        // Unstage all files command
+        const unstageAllCommand = vscode.commands.registerCommand(`sqlServerGitIntegration.unstageAll.${this._instanceId}`, async () => {
+            await this._unstageAll();
+        });
+
+        this._disposables.push(commitCommand, refreshCommand, viewDiffCommand, stageFileCommand, stageAllCommand, unstageFileCommand, unstageAllCommand);
     }
 
     // Pre-fetch all Git files for changed files
@@ -145,7 +171,9 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
 
             try {
                 // Get git status
+                console.log('Getting git status...');
                 const statusResult = await GitManager.executeCommand('git status --porcelain');
+                console.log('Git status result:', statusResult);
                 
                 if (statusResult.success && statusResult.output) {
                     const changedFiles = this._parseGitStatus(statusResult.output);
@@ -153,25 +181,45 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
                     // Pre-fetch all Git files
                     await this._prefetchGitFiles(changedFiles.map(f => f.path));
                     
-                    const resourceStates = changedFiles.map(fileInfo => ({
-                        resourceUri: vscode.Uri.file(path.join(this._gitDir, fileInfo.path)),
-                        command: {
-                            title: 'View Changes',
-                            command: `sqlServerGitIntegration.viewDiff.${this._instanceId}`,
-                            arguments: [vscode.Uri.file(path.join(this._gitDir, fileInfo.path))]
-                        },
-                        decorations: {
-                            strikeThrough: fileInfo.status === 'D',
-                            faded: false,
-                            tooltip: this._getStatusTooltip(fileInfo.status),
-                            iconPath: new vscode.ThemeIcon(this._getStatusIcon(fileInfo.status), new vscode.ThemeColor(this._getStatusColor(fileInfo.status)))
-                        }
-                    }));
+                    // Separate staged and unstaged files
+                    const stagedFiles: any[] = [];
+                    const unstagedFiles: any[] = [];
                     
-                    this._resourceGroup.resourceStates = resourceStates;
-                    this._sourceControl.count = resourceStates.length;
+                    changedFiles.forEach(fileInfo => {
+                        const fileUri = vscode.Uri.file(path.join(this._gitDir, fileInfo.path));
+                        
+                        const resourceState = {
+                            resourceUri: fileUri,
+                            command: {
+                                title: 'View Changes',
+                                command: `sqlServerGitIntegration.viewDiff.${this._instanceId}`,
+                                arguments: [fileUri]
+                            },
+                            decorations: {
+                                strikeThrough: fileInfo.status === 'D',
+                                faded: false,
+                                tooltip: this._getStatusTooltip(fileInfo.status),
+                                iconPath: new vscode.ThemeIcon(this._getStatusIcon(fileInfo.status), new vscode.ThemeColor(this._getStatusColor(fileInfo.status)))
+                            },
+                            contextValue: fileInfo.isStaged ? 'staged' : 'unstaged'
+                        };
+                        
+                        if (fileInfo.isStaged) {
+                            stagedFiles.push(resourceState);
+                        } else {
+                            unstagedFiles.push(resourceState);
+                        }
+                    });
+                    
+                    // Update both resource groups
+                    this._changesGroup.resourceStates = unstagedFiles;
+                    this._stagedGroup.resourceStates = stagedFiles;
+                    this._sourceControl.count = stagedFiles.length + unstagedFiles.length;
+                    
+                    console.log(`Updated groups: ${unstagedFiles.length} unstaged, ${stagedFiles.length} staged`);
                 } else {
-                    this._resourceGroup.resourceStates = [];
+                    this._changesGroup.resourceStates = [];
+                    this._stagedGroup.resourceStates = [];
                     this._sourceControl.count = 0;
                 }
             } finally {
@@ -179,21 +227,48 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
             }
         } catch (error) {
             console.error('Error updating source control:', error);
-            this._resourceGroup.resourceStates = [];
+            this._changesGroup.resourceStates = [];
+            this._stagedGroup.resourceStates = [];
             this._sourceControl.count = 0;
         }
     }
 
-    private _parseGitStatus(statusOutput: string): Array<{path: string, status: string}> {
+    private _parseGitStatus(statusOutput: string): Array<{path: string, status: string, isStaged: boolean}> {
         console.log('Git status output:', statusOutput); // Debug log
         return statusOutput
             .split('\n')
             .filter(line => line.trim())
             .map(line => {
-                const status = line.substring(0, 2).trim(); // Get status code (e.g., "M", "A", "D")
-                const path = line.substring(3); // Get file path
-                console.log(`Parsed: status="${status}", path="${path}"`); // Debug log
-                return { path, status };
+                const statusCode = line.substring(0, 2);
+                const indexStatus = statusCode[0]; // Staging area status
+                const workTreeStatus = statusCode[1]; // Working directory status
+                let filePath = line.substring(3); // Get file path
+                
+                // Remove quotes from filenames if present (Git adds quotes around filenames with spaces)
+                if (filePath.startsWith('"') && filePath.endsWith('"')) {
+                    filePath = filePath.slice(1, -1);
+                }
+                
+                // Determine primary status and if it's staged
+                let status: string;
+                let isStaged: boolean;
+                
+                if (indexStatus !== ' ' && indexStatus !== '?') {
+                    // File has changes in staging area
+                    status = indexStatus;
+                    isStaged = true;
+                } else if (workTreeStatus !== ' ') {
+                    // File has changes in working directory only
+                    status = workTreeStatus;
+                    isStaged = false;
+                } else {
+                    // Fallback
+                    status = statusCode.trim() || 'M';
+                    isStaged = false;
+                }
+                
+                console.log(`Parsed: status="${status}", path="${filePath}", staged=${isStaged}`); // Debug log
+                return { path: filePath, status, isStaged };
             });
     }
 
@@ -201,7 +276,7 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
         switch (status) {
             case 'M': return 'Modified';
             case 'A':
-            case '??': return 'Added';
+            case '?': return 'Added';
             case 'D': return 'Deleted';
             case 'R': return 'Renamed';
             case 'C': return 'Copied';
@@ -214,7 +289,7 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
         switch (status) {
             case 'M': return 'gitDecoration.modifiedResourceForeground';
             case 'A':
-            case '??': return 'gitDecoration.addedResourceForeground';
+            case '?': return 'gitDecoration.addedResourceForeground';
             case 'D': return 'gitDecoration.deletedResourceForeground';
             case 'R': return 'gitDecoration.renamedResourceForeground';
             case 'C': return 'gitDecoration.addedResourceForeground';
@@ -227,12 +302,119 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
         switch (status) {
             case 'M': return 'diff-modified';
             case 'A':
-            case '??': return 'diff-added'; 
+            case '?': return 'diff-added'; 
             case 'D': return 'diff-removed';
             case 'R': return 'diff-renamed';
             case 'C': return 'diff-added'; // Use added icon for copied files
             case 'U': return 'error'; // Use error icon for unmerged/conflict
             default: return 'diff-modified';
+        }
+    }
+
+    private async _stageFile(uri: vscode.Uri) {
+        try {
+            console.log('_stageFile called with uri:', uri);
+            if (!uri || !uri.fsPath) {
+                console.log('Invalid URI - uri:', uri, 'fsPath:', uri?.fsPath);
+                vscode.window.showErrorMessage('Invalid file URI provided for staging');
+                return;
+            }
+
+            const relativePath = path.relative(this._gitDir, uri.fsPath);
+            const originalCwd = process.cwd();
+            process.chdir(this._gitDir);
+
+            try {
+                console.log(`Executing: git add "${relativePath}"`);
+                const result = await GitManager.executeCommand(`git add "${relativePath}"`);
+                console.log('Git add result:', result);
+                
+                if (result.success) {
+                    console.log('Git add successful, calling _update()');
+                    await this._update();
+                    vscode.window.showInformationMessage(`Staged ${path.basename(relativePath)}`);
+                } else {
+                    console.log('Git add failed:', result.output);
+                    vscode.window.showErrorMessage(`Failed to stage file: ${result.output}`);
+                }
+            } finally {
+                process.chdir(originalCwd);
+            }
+        } catch (error) {
+            console.error('Error staging file:', error);
+            vscode.window.showErrorMessage(`Failed to stage file: ${error}`);
+        }
+    }
+
+    private async _stageAll() {
+        try {
+            const originalCwd = process.cwd();
+            process.chdir(this._gitDir);
+
+            try {
+                const result = await GitManager.executeCommand('git add .');
+                if (result.success) {
+                    this._update();
+                    vscode.window.showInformationMessage('Staged all changes');
+                } else {
+                    vscode.window.showErrorMessage(`Failed to stage all files: ${result.output}`);
+                }
+            } finally {
+                process.chdir(originalCwd);
+            }
+        } catch (error) {
+            console.error('Error staging all files:', error);
+            vscode.window.showErrorMessage(`Failed to stage all files: ${error}`);
+        }
+    }
+
+    private async _unstageFile(uri: vscode.Uri) {
+        try {
+            if (!uri || !uri.fsPath) {
+                vscode.window.showErrorMessage('Invalid file URI provided for unstaging');
+                return;
+            }
+
+            const relativePath = path.relative(this._gitDir, uri.fsPath);
+            const originalCwd = process.cwd();
+            process.chdir(this._gitDir);
+
+            try {
+                const result = await GitManager.executeCommand(`git reset HEAD "${relativePath}"`);
+                if (result.success) {
+                    this._update();
+                    vscode.window.showInformationMessage(`Unstaged ${path.basename(relativePath)}`);
+                } else {
+                    vscode.window.showErrorMessage(`Failed to unstage file: ${result.output}`);
+                }
+            } finally {
+                process.chdir(originalCwd);
+            }
+        } catch (error) {
+            console.error('Error unstaging file:', error);
+            vscode.window.showErrorMessage(`Failed to unstage file: ${error}`);
+        }
+    }
+
+    private async _unstageAll() {
+        try {
+            const originalCwd = process.cwd();
+            process.chdir(this._gitDir);
+
+            try {
+                const result = await GitManager.executeCommand('git reset HEAD .');
+                if (result.success) {
+                    this._update();
+                    vscode.window.showInformationMessage('Unstaged all changes');
+                } else {
+                    vscode.window.showErrorMessage(`Failed to unstage all files: ${result.output}`);
+                }
+            } finally {
+                process.chdir(originalCwd);
+            }
+        } catch (error) {
+            console.error('Error unstaging all files:', error);
+            vscode.window.showErrorMessage(`Failed to unstage all files: ${error}`);
         }
     }
 

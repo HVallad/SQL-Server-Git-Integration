@@ -34,6 +34,31 @@
         "command": "sql-server-git-integration.viewGitHistory",
         "title": "View Git History",
         "icon": "$(history)"
+      },
+      {
+        "command": "sql-server-git-integration.stageFile",
+        "title": "Stage Changes",
+        "icon": "$(add)"
+      },
+      {
+        "command": "sql-server-git-integration.unstageFile",
+        "title": "Unstage Changes",
+        "icon": "$(remove)"
+      },
+      {
+        "command": "sql-server-git-integration.stageAll",
+        "title": "Stage All Changes",
+        "icon": "$(add)"
+      },
+      {
+        "command": "sql-server-git-integration.unstageAll",
+        "title": "Unstage All Changes", 
+        "icon": "$(remove)"
+      },
+      {
+        "command": "sql-server-git-integration.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)"
       }
     ],
     "menus": {
@@ -52,6 +77,37 @@
           "command": "sql-server-git-integration.viewGitHistory",
           "when": "view == objectExplorer && viewItem =~ /\\btype=(Database)\\b/",
           "group": "sqlgit@3"
+        }
+      ],
+      "scm/resourceState/context": [
+        {
+          "command": "sql-server-git-integration.stageFile",
+          "when": "scmProvider == 'sqlServerGitIntegration' && scmResourceState == 'unstaged'",
+          "group": "inline"
+        },
+        {
+          "command": "sql-server-git-integration.unstageFile", 
+          "when": "scmProvider == 'sqlServerGitIntegration' && scmResourceState == 'staged'",
+          "group": "inline"
+        }
+      ],
+      "scm/resourceGroup/context": [
+        {
+          "command": "sql-server-git-integration.stageAll",
+          "when": "scmProvider == 'sqlServerGitIntegration'",
+          "group": "inline"
+        },
+        {
+          "command": "sql-server-git-integration.unstageAll",
+          "when": "scmProvider == 'sqlServerGitIntegration'", 
+          "group": "inline"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "sql-server-git-integration.refresh",
+          "when": "scmProvider == 'sqlServerGitIntegration'",
+          "group": "navigation"
         }
       ]
     },
