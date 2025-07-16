@@ -200,12 +200,12 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
     private _getStatusTooltip(status: string): string {
         switch (status) {
             case 'M': return 'Modified';
-            case 'A': return 'Added';
+            case 'A':
+            case '??': return 'Added';
             case 'D': return 'Deleted';
             case 'R': return 'Renamed';
             case 'C': return 'Copied';
             case 'U': return 'Unmerged';
-            case '??': return 'Untracked';
             default: return 'Changed';
         }
     }
@@ -213,12 +213,12 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
     private _getStatusColor(status: string): string {
         switch (status) {
             case 'M': return 'gitDecoration.modifiedResourceForeground';
-            case 'A': return 'gitDecoration.addedResourceForeground';
+            case 'A':
+            case '??': return 'gitDecoration.addedResourceForeground';
             case 'D': return 'gitDecoration.deletedResourceForeground';
             case 'R': return 'gitDecoration.renamedResourceForeground';
             case 'C': return 'gitDecoration.addedResourceForeground';
             case 'U': return 'gitDecoration.conflictingResourceForeground';
-            case '??': return 'gitDecoration.untrackedResourceForeground';
             default: return 'gitDecoration.modifiedResourceForeground';
         }
     }
@@ -226,12 +226,12 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
     private _getStatusIcon(status: string): string {
         switch (status) {
             case 'M': return 'diff-modified';
-            case 'A': return 'diff-added'; 
+            case 'A':
+            case '??': return 'diff-added'; 
             case 'D': return 'diff-removed';
             case 'R': return 'diff-renamed';
             case 'C': return 'diff-added'; // Use added icon for copied files
             case 'U': return 'error'; // Use error icon for unmerged/conflict
-            case '??': return 'new-file'; // Use new-file icon for untracked
             default: return 'diff-modified';
         }
     }
