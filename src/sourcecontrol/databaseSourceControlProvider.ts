@@ -151,20 +151,20 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
                     const changedFiles = this._parseGitStatus(statusResult.output);
                     
                     // Pre-fetch all Git files
-                    await this._prefetchGitFiles(changedFiles);
+                    await this._prefetchGitFiles(changedFiles.map(f => f.path));
                     
-                    const resourceStates = changedFiles.map(file => ({
-                        resourceUri: vscode.Uri.file(path.join(this._gitDir, file)),
+                    const resourceStates = changedFiles.map(fileInfo => ({
+                        resourceUri: vscode.Uri.file(path.join(this._gitDir, fileInfo.path)),
                         command: {
                             title: 'View Changes',
-                            command: `sqlServerGitIntegration.viewDiff.${this._instanceId}`, // Use unique command ID
-                            arguments: [vscode.Uri.file(path.join(this._gitDir, file))]
+                            command: `sqlServerGitIntegration.viewDiff.${this._instanceId}`,
+                            arguments: [vscode.Uri.file(path.join(this._gitDir, fileInfo.path))]
                         },
                         decorations: {
-                            strikeThrough: false,
+                            strikeThrough: fileInfo.status === 'D',
                             faded: false,
-                            tooltip: this._getStatusTooltip(file),
-                            iconPath: new vscode.ThemeIcon(this._getStatusIcon(file))
+                            tooltip: this._getStatusTooltip(fileInfo.status),
+                            iconPath: new vscode.ThemeIcon(this._getStatusIcon(fileInfo.status), new vscode.ThemeColor(this._getStatusColor(fileInfo.status)))
                         }
                     }));
                     
@@ -184,19 +184,56 @@ export class DatabaseSourceControlProvider implements vscode.QuickDiffProvider {
         }
     }
 
-    private _parseGitStatus(statusOutput: string): string[] {
+    private _parseGitStatus(statusOutput: string): Array<{path: string, status: string}> {
+        console.log('Git status output:', statusOutput); // Debug log
         return statusOutput
             .split('\n')
             .filter(line => line.trim())
-            .map(line => line.substring(3)); // Remove status codes (e.g., " M " -> "filename")
+            .map(line => {
+                const status = line.substring(0, 2).trim(); // Get status code (e.g., "M", "A", "D")
+                const path = line.substring(3); // Get file path
+                console.log(`Parsed: status="${status}", path="${path}"`); // Debug log
+                return { path, status };
+            });
     }
 
-    private _getStatusTooltip(filename: string): string {
-        return 'Modified';
+    private _getStatusTooltip(status: string): string {
+        switch (status) {
+            case 'M': return 'Modified';
+            case 'A': return 'Added';
+            case 'D': return 'Deleted';
+            case 'R': return 'Renamed';
+            case 'C': return 'Copied';
+            case 'U': return 'Unmerged';
+            case '??': return 'Untracked';
+            default: return 'Changed';
+        }
     }
 
-    private _getStatusIcon(filename: string): string {
-        return 'modified';
+    private _getStatusColor(status: string): string {
+        switch (status) {
+            case 'M': return 'gitDecoration.modifiedResourceForeground';
+            case 'A': return 'gitDecoration.addedResourceForeground';
+            case 'D': return 'gitDecoration.deletedResourceForeground';
+            case 'R': return 'gitDecoration.renamedResourceForeground';
+            case 'C': return 'gitDecoration.addedResourceForeground';
+            case 'U': return 'gitDecoration.conflictingResourceForeground';
+            case '??': return 'gitDecoration.untrackedResourceForeground';
+            default: return 'gitDecoration.modifiedResourceForeground';
+        }
+    }
+
+    private _getStatusIcon(status: string): string {
+        switch (status) {
+            case 'M': return 'diff-modified';
+            case 'A': return 'diff-added'; 
+            case 'D': return 'diff-removed';
+            case 'R': return 'diff-renamed';
+            case 'C': return 'diff-added'; // Use added icon for copied files
+            case 'U': return 'error'; // Use error icon for unmerged/conflict
+            case '??': return 'new-file'; // Use new-file icon for untracked
+            default: return 'diff-modified';
+        }
     }
 
     private async _commit() {
