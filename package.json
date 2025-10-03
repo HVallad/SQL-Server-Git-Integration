@@ -19,17 +19,47 @@
         "SQL Server"
     ],
     "activationEvents": [
-        "onCommand:mssql-git-sync.scriptDatabaseToGit"
+        "onCommand:mssql-git-sync.scriptDatabaseToGit",
+        "onCommand:mssql-git-sync.linkToGit",
+        "onCommand:mssql-git-sync.unlinkFromGit"
     ],
     "main": "./out/extension.js",
     "extensionDependencies": [
         "ms-mssql.mssql"
     ],
     "contributes": {
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "mssql-git-sync",
+                    "title": "MSSQL Git Sync",
+                    "icon": "$(database)"
+                }
+            ]
+        },
+        "views": {
+            "mssql-git-sync": [
+                {
+                    "type": "webview",
+                    "id": "mssql-git-sync.gitSyncPanel",
+                    "name": "Git Sync Manager"
+                }
+            ]
+        },
         "commands": [
             {
                 "command": "mssql-git-sync.scriptDatabaseToGit",
                 "title": "Sync Local Cache",
+                "category": "MSSQL Git Sync"
+            },
+            {
+                "command": "mssql-git-sync.linkToGit",
+                "title": "Link to Git",
+                "category": "MSSQL Git Sync"
+            },
+            {
+                "command": "mssql-git-sync.unlinkFromGit",
+                "title": "Unlink from Git",
                 "category": "MSSQL Git Sync"
             }
         ],
@@ -39,6 +69,16 @@
                     "command": "mssql-git-sync.scriptDatabaseToGit",
                     "when": "view == objectExplorer && viewItem =~ /\\btype=(Database)\\b/",
                     "group": "9_MSSQL_GIT_SYNC@1"
+                },
+                {
+                    "command": "mssql-git-sync.linkToGit",
+                    "when": "view == objectExplorer && viewItem =~ /\\btype=(Database)\\b/",
+                    "group": "9_MSSQL_GIT_SYNC@2"
+                },
+                {
+                    "command": "mssql-git-sync.unlinkFromGit",
+                    "when": "view == objectExplorer && viewItem =~ /\\btype=(Database)\\b/",
+                    "group": "9_MSSQL_GIT_SYNC@3"
                 }
             ]
         }

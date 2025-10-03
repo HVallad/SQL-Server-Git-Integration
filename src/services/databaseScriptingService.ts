@@ -32,6 +32,21 @@ interface DatabaseObject {
 }
 
 /**
+ * Interface for database metadata stored in metadata.json
+ */
+interface DatabaseMetadata {
+    databaseName: string;
+    scriptedAt: string;
+    totalObjectsScripted: number;
+    totalErrors: number;
+    objectTypes: string[];
+    gitLinked: boolean;
+    gitRepositoryUrl?: string;
+    gitBranch?: string;
+    gitLinkedDate?: string;
+}
+
+/**
  * Service responsible for scripting database objects to files
  */
 export class DatabaseScriptingService {
@@ -83,8 +98,10 @@ export class DatabaseScriptingService {
             },
             async (progress) => {
                 try {
-                    // Ensure output directory exists
+                    // Ensure output directory and LocalCache subfolder exist
                     await fs.mkdir(outputPath, { recursive: true });
+                    const localCachePath = path.join(outputPath, 'LocalCache');
+                    await fs.mkdir(localCachePath, { recursive: true });
 
                     progress.report({ message: 'Preparing to script database objects...' });
 
@@ -95,13 +112,13 @@ export class DatabaseScriptingService {
                     // Store the current database name for use in all queries
                     this.currentDatabaseName = databaseName;
 
-                    // Script different types of objects
-                    await this.scriptObjectsByType(connectionUri, node, databaseName, outputPath, progress);
+                    // Script different types of objects to LocalCache folder
+                    await this.scriptObjectsByType(connectionUri, node, databaseName, outputPath, localCachePath, progress);
 
                     // Show success message with option to open folder
                     const openFolder = 'Open Folder';
                     const result = await vscode.window.showInformationMessage(
-                        `Database "${databaseName}" scripted successfully to: ${outputPath}`,
+                        `Database "${databaseName}" scripted successfully to: ${localCachePath}`,
                         openFolder
                     );
 
@@ -114,6 +131,304 @@ export class DatabaseScriptingService {
                 }
             }
         );
+    }
+
+    /**
+     * Link a database to a Git repository
+     * @param node The database node from the object explorer
+     */
+    public async linkToGit(node: vscodeMssql.ITreeNodeInfo): Promise<void> {
+        const { GitService } = await import('./gitService');
+        const gitService = new GitService();
+
+        // Get database name
+        const databaseName = this.mssqlApi.getDatabaseNameFromTreeNode(node);
+        if (!databaseName) {
+            throw new Error('Could not determine database name from the selected node');
+        }
+
+        console.log(`[MSSQL-Git-Sync] ========== LINKING DATABASE TO GIT ==========`);
+        console.log(`[MSSQL-Git-Sync] Database: ${databaseName}`);
+
+        // Check if database is already linked
+        const isLinked = await this.isGitLinked(node);
+        if (isLinked) {
+            const metadata = await this.readMetadata(this.getOutputPath(node));
+            const repoInfo = metadata?.gitRepositoryUrl ? ` to ${metadata.gitRepositoryUrl}` : '';
+            vscode.window.showWarningMessage(
+                `Database "${databaseName}" is already linked to a Git repository${repoInfo}. Please unlink it first if you want to link to a different repository.`
+            );
+            return;
+        }
+
+        // Check if Git is installed
+        const gitInstalled = await gitService.isGitInstalled();
+        if (!gitInstalled) {
+            throw new Error('Git is not installed on your system. Please install Git and try again.');
+        }
+
+        const gitVersion = await gitService.getGitVersion();
+        console.log(`[MSSQL-Git-Sync] Git version: ${gitVersion}`);
+
+        // Get output path
+        const outputPath = this.getOutputPath(node);
+        const sourceControlPath = path.join(outputPath, 'SourceControl');
+
+        // Check if SourceControl folder already exists (shouldn't happen if metadata is correct)
+        try {
+            await fs.access(sourceControlPath);
+            throw new Error('SourceControl folder already exists. Please remove it first or unlink the existing repository.');
+        } catch (error) {
+            // Folder doesn't exist, which is what we want
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+                throw error;
+            }
+        }
+
+        // Step 1: Prompt for Git repository URL
+        const repositoryUrl = await vscode.window.showInputBox({
+            prompt: 'Enter the Git repository URL',
+            placeHolder: 'https://github.com/user/repo.git or git@github.com:user/repo.git',
+            validateInput: (value) => {
+                if (!value || value.trim().length === 0) {
+                    return 'Repository URL cannot be empty';
+                }
+                if (!gitService.validateGitUrl(value)) {
+                    return 'Invalid Git URL format. Use HTTPS (https://...) or SSH (git@...)';
+                }
+                return null;
+            }
+        });
+
+        if (!repositoryUrl) {
+            // User cancelled
+            return;
+        }
+
+        console.log(`[MSSQL-Git-Sync] Repository URL: ${repositoryUrl}`);
+
+        // Step 2: Fetch and display available branches
+        let branches: string[] = [];
+        try {
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: 'Fetching branches from repository...',
+                    cancellable: false
+                },
+                async () => {
+                    branches = await gitService.fetchRemoteBranches(repositoryUrl);
+                }
+            );
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            throw new Error(`Failed to fetch branches: ${errorMessage}`);
+        }
+
+        if (!branches || branches.length === 0) {
+            throw new Error('No branches found in the repository');
+        }
+
+        // Show branch selection QuickPick
+        const selectedBranch = await vscode.window.showQuickPick(branches, {
+            placeHolder: 'Select a branch to link',
+            title: 'Select Git Branch'
+        });
+
+        if (!selectedBranch) {
+            // User cancelled
+            return;
+        }
+
+        console.log(`[MSSQL-Git-Sync] Selected branch: ${selectedBranch}`);
+
+        // Step 3: Clone the repository
+        try {
+            await vscode.window.withProgress(
+                {
+                    location: vscode.ProgressLocation.Notification,
+                    title: `Linking to Git repository (branch: ${selectedBranch})...`,
+                    cancellable: false
+                },
+                async (progress) => {
+                    // Ensure SourceControl folder exists
+                    await fs.mkdir(sourceControlPath, { recursive: true });
+
+                    // Clone the repository
+                    await gitService.cloneRepository(repositoryUrl, selectedBranch, sourceControlPath, progress);
+                }
+            );
+        } catch (error) {
+            // Clean up SourceControl folder if clone failed
+            try {
+                await fs.rm(sourceControlPath, { recursive: true, force: true });
+            } catch (cleanupError) {
+                console.error('[MSSQL-Git-Sync] Error cleaning up after failed clone:', cleanupError);
+            }
+
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            throw new Error(`Failed to clone repository: ${errorMessage}`);
+        }
+
+        // Step 4: Save Git link metadata
+        const metadata = await this.readMetadata(outputPath);
+        const updatedMetadata: DatabaseMetadata = {
+            ...(metadata || {
+                databaseName: databaseName,
+                scriptedAt: new Date().toISOString(),
+                totalObjectsScripted: 0,
+                totalErrors: 0,
+                objectTypes: []
+            }),
+            gitLinked: true,
+            gitRepositoryUrl: repositoryUrl,
+            gitBranch: selectedBranch,
+            gitLinkedDate: new Date().toISOString()
+        };
+
+        await this.writeMetadata(outputPath, updatedMetadata);
+
+        console.log(`[MSSQL-Git-Sync] ✓ Successfully linked to Git repository`);
+
+        // Show success message
+        const openFolder = 'Open Folder';
+        const result = await vscode.window.showInformationMessage(
+            `Database "${databaseName}" successfully linked to Git repository (branch: ${selectedBranch})`,
+            openFolder
+        );
+
+        if (result === openFolder) {
+            await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(sourceControlPath));
+        }
+    }
+
+    /**
+     * Unlink a database from a Git repository
+     * @param node The database node from the object explorer
+     */
+    public async unlinkFromGit(node: vscodeMssql.ITreeNodeInfo): Promise<void> {
+        // Get database name
+        const databaseName = this.mssqlApi.getDatabaseNameFromTreeNode(node);
+        if (!databaseName) {
+            throw new Error('Could not determine database name from the selected node');
+        }
+
+        console.log(`[MSSQL-Git-Sync] ========== UNLINKING DATABASE FROM GIT ==========`);
+        console.log(`[MSSQL-Git-Sync] Database: ${databaseName}`);
+
+        // Get output path
+        const outputPath = this.getOutputPath(node);
+        const sourceControlPath = path.join(outputPath, 'SourceControl');
+
+        // Check if database is actually linked
+        const isLinked = await this.isGitLinked(node);
+        if (!isLinked) {
+            vscode.window.showWarningMessage(`Database "${databaseName}" is not linked to a Git repository.`);
+            return;
+        }
+
+        // Read current metadata to get repository info for the confirmation message
+        const metadata = await this.readMetadata(outputPath);
+        const repoInfo = metadata?.gitRepositoryUrl ? ` (${metadata.gitRepositoryUrl})` : '';
+
+        // Show confirmation dialog
+        const confirmMessage = `Are you sure you want to unlink this database from Git${repoInfo}? This will delete the SourceControl folder and all its contents.`;
+        const unlinkButton = 'Unlink';
+        const cancelButton = 'Cancel';
+
+        const result = await vscode.window.showWarningMessage(
+            confirmMessage,
+            { modal: true },
+            unlinkButton,
+            cancelButton
+        );
+
+        if (result !== unlinkButton) {
+            // User cancelled
+            console.log(`[MSSQL-Git-Sync] Unlink cancelled by user`);
+            return;
+        }
+
+        console.log(`[MSSQL-Git-Sync] User confirmed unlink operation`);
+
+        // Delete the SourceControl folder
+        try {
+            console.log(`[MSSQL-Git-Sync] Deleting SourceControl folder: ${sourceControlPath}`);
+
+            // Check if folder exists before trying to delete
+            try {
+                await fs.access(sourceControlPath);
+                // Folder exists, delete it
+                await fs.rm(sourceControlPath, { recursive: true, force: true });
+                console.log(`[MSSQL-Git-Sync] ✓ SourceControl folder deleted successfully`);
+            } catch (accessError) {
+                // Folder doesn't exist, which is fine
+                if ((accessError as NodeJS.ErrnoException).code === 'ENOENT') {
+                    console.log(`[MSSQL-Git-Sync] SourceControl folder doesn't exist, skipping deletion`);
+                } else {
+                    throw accessError;
+                }
+            }
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(`[MSSQL-Git-Sync] Error deleting SourceControl folder: ${errorMessage}`);
+            throw new Error(`Failed to delete SourceControl folder: ${errorMessage}`);
+        }
+
+        // Update metadata to reflect unlinked status
+        try {
+            const updatedMetadata: DatabaseMetadata = {
+                ...(metadata || {
+                    databaseName: databaseName,
+                    scriptedAt: new Date().toISOString(),
+                    totalObjectsScripted: 0,
+                    totalErrors: 0,
+                    objectTypes: []
+                }),
+                gitLinked: false,
+                gitRepositoryUrl: undefined,
+                gitBranch: undefined,
+                gitLinkedDate: undefined
+            };
+
+            await this.writeMetadata(outputPath, updatedMetadata);
+            console.log(`[MSSQL-Git-Sync] ✓ Metadata updated successfully`);
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(`[MSSQL-Git-Sync] Error updating metadata: ${errorMessage}`);
+            throw new Error(`Failed to update metadata: ${errorMessage}`);
+        }
+
+        console.log(`[MSSQL-Git-Sync] ✓ Successfully unlinked from Git repository`);
+
+        // Show success message
+        vscode.window.showInformationMessage(
+            `Database "${databaseName}" successfully unlinked from Git repository`
+        );
+    }
+
+    /**
+     * Get the database name from a tree node (public method for external access)
+     * @param node The tree node
+     * @returns The database name or undefined
+     */
+    public getDatabaseName(node: vscodeMssql.ITreeNodeInfo): string | undefined {
+        return this.mssqlApi.getDatabaseNameFromTreeNode(node);
+    }
+
+    /**
+     * Get Git metadata for a database node (public method for external access)
+     * @param node The tree node
+     * @returns The metadata or undefined
+     */
+    public async getGitMetadata(node: vscodeMssql.ITreeNodeInfo): Promise<DatabaseMetadata | undefined> {
+        try {
+            const outputPath = this.getOutputPath(node);
+            const metadata = await this.readMetadata(outputPath);
+            return metadata || undefined;
+        } catch (error) {
+            return undefined;
+        }
     }
 
     /**
@@ -391,6 +706,79 @@ export class DatabaseScriptingService {
     }
 
     /**
+     * Read metadata from metadata.json file
+     * @param rootPath The root output path
+     * @returns The metadata object or null if file doesn't exist
+     */
+    private async readMetadata(rootPath: string): Promise<DatabaseMetadata | null> {
+        try {
+            const metadataPath = path.join(rootPath, 'metadata.json');
+            const content = await fs.readFile(metadataPath, 'utf8');
+            return JSON.parse(content) as DatabaseMetadata;
+        } catch (error) {
+            // File doesn't exist or can't be read
+            return null;
+        }
+    }
+
+    /**
+     * Write metadata to metadata.json file
+     * @param rootPath The root output path
+     * @param metadata The metadata to write
+     */
+    private async writeMetadata(rootPath: string, metadata: DatabaseMetadata): Promise<void> {
+        const metadataPath = path.join(rootPath, 'metadata.json');
+        await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
+    }
+
+    /**
+     * Check if a database is linked to a Git repository
+     * @param node The database node from the object explorer
+     * @returns True if the database is linked to Git
+     */
+    public async isGitLinked(node: vscodeMssql.ITreeNodeInfo): Promise<boolean> {
+        try {
+            const databaseName = this.mssqlApi.getDatabaseNameFromTreeNode(node);
+            if (!databaseName) {
+                return false;
+            }
+
+            const connectionProfile = node.connectionProfile;
+            if (!connectionProfile) {
+                return false;
+            }
+
+            // Get the output path for this database
+            const uniqueFolderName = this.generateUniqueFolderName(connectionProfile, databaseName);
+            const outputPath = path.join(this.context.globalStorageUri.fsPath, uniqueFolderName);
+
+            // Read metadata
+            const metadata = await this.readMetadata(outputPath);
+            return metadata?.gitLinked === true;
+        } catch (error) {
+            console.error('[MSSQL-Git-Sync] Error checking Git link status:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Get the output path for a database
+     * @param node The database node from the object explorer
+     * @returns The output path
+     */
+    public getOutputPath(node: vscodeMssql.ITreeNodeInfo): string {
+        const databaseName = this.mssqlApi.getDatabaseNameFromTreeNode(node);
+        const connectionProfile = node.connectionProfile;
+
+        if (!databaseName || !connectionProfile) {
+            throw new Error('Could not determine database name or connection profile');
+        }
+
+        const uniqueFolderName = this.generateUniqueFolderName(connectionProfile, databaseName);
+        return path.join(this.context.globalStorageUri.fsPath, uniqueFolderName);
+    }
+
+    /**
      * Verify and switch to the correct database context
      *
      * The connectionSharing.connect() method does not honor the database parameter,
@@ -584,7 +972,8 @@ export class DatabaseScriptingService {
      * @param connectionUri The connection URI
      * @param node The tree node (for reconnection if needed)
      * @param databaseName The database name
-     * @param outputPath The base output path
+     * @param rootPath The root output path (for metadata.json)
+     * @param localCachePath The LocalCache subfolder path (for SQL files)
      * @param progress Progress reporter
      * @returns The final connection URI (may be different if reconnection occurred)
      */
@@ -592,7 +981,8 @@ export class DatabaseScriptingService {
         connectionUri: string,
         node: vscodeMssql.ITreeNodeInfo,
         databaseName: string,
-        outputPath: string,
+        rootPath: string,
+        localCachePath: string,
         progress: vscode.Progress<{ message?: string; increment?: number }>
     ): Promise<string> {
         // Define object types to script with their SQL query types
@@ -615,8 +1005,8 @@ export class DatabaseScriptingService {
 
             progress.report({ message: `Querying ${objType.folder}...` });
 
-            // Create folder for this object type
-            const typePath = path.join(outputPath, objType.folder);
+            // Create folder for this object type in LocalCache
+            const typePath = path.join(localCachePath, objType.folder);
             await fs.mkdir(typePath, { recursive: true });
 
             try {
@@ -674,14 +1064,15 @@ export class DatabaseScriptingService {
             }
         }
 
-        // Create a metadata file with connection and database information
-        const metadataPath = path.join(outputPath, 'metadata.json');
+        // Create a metadata file with connection and database information in the root folder
+        const metadataPath = path.join(rootPath, 'metadata.json');
         const metadata = {
             databaseName: databaseName,
             scriptedAt: new Date().toISOString(),
             totalObjectsScripted: totalScripted,
             totalErrors: totalErrors,
-            objectTypes: objectTypes.map(t => t.type)
+            objectTypes: objectTypes.map(t => t.type),
+            gitLinked: false  // Default to not linked
         };
         await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
 

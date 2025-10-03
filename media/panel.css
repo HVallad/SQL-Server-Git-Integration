@@ -1,0 +1,278 @@
+/*---------------------------------------------------------------------------------------------
+ *  Git Sync Panel Styles - MSSQL Object Explorer Style
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+    padding: 0;
+    margin: 0;
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size);
+    color: var(--vscode-foreground);
+    background-color: var(--vscode-sideBar-background);
+    overflow-x: hidden;
+}
+
+.container {
+    padding: 0;
+}
+
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.header-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--vscode-descriptionForeground);
+    letter-spacing: 0.5px;
+}
+
+.refresh-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    background: transparent;
+    color: var(--vscode-foreground);
+    border: none;
+    cursor: pointer;
+    font-size: 11px;
+    opacity: 0.8;
+}
+
+.refresh-btn:hover {
+    opacity: 1;
+    background-color: var(--vscode-toolbar-hoverBackground);
+}
+
+.tree-view {
+    padding: 4px 0;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 32px 16px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+}
+
+.empty-state p {
+    margin: 8px 0;
+}
+
+.empty-state .hint {
+    font-size: 11px;
+    opacity: 0.8;
+}
+
+/* Server Group */
+.server-group {
+    margin-bottom: 2px;
+}
+
+.server-header {
+    display: flex;
+    align-items: center;
+    padding: 2px 8px;
+    cursor: pointer;
+    user-select: none;
+    height: 22px;
+}
+
+.server-header:hover {
+    background-color: var(--vscode-list-hoverBackground);
+}
+
+.server-header.selected {
+    background-color: var(--vscode-list-activeSelectionBackground);
+    color: var(--vscode-list-activeSelectionForeground);
+}
+
+.server-chevron {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 2px;
+    transition: transform 0.2s ease;
+}
+
+.server-chevron.expanded {
+    transform: rotate(90deg);
+}
+
+.server-icon {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 4px;
+    color: var(--vscode-symbolIcon-classForeground);
+}
+
+.server-name {
+    font-size: 13px;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.server-databases {
+    padding-left: 0;
+    display: none;
+}
+
+.server-databases.expanded {
+    display: block;
+}
+
+/* Database Item */
+.database-item {
+    display: flex;
+    align-items: center;
+    padding: 2px 8px 2px 24px;
+    cursor: pointer;
+    user-select: none;
+    height: 22px;
+    position: relative;
+}
+
+.database-item:hover {
+    background-color: var(--vscode-list-hoverBackground);
+}
+
+.database-item.selected {
+    background-color: var(--vscode-list-activeSelectionBackground);
+    color: var(--vscode-list-activeSelectionForeground);
+}
+
+.database-icon {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 4px;
+    color: var(--vscode-symbolIcon-variableForeground);
+}
+
+.database-name {
+    font-size: 13px;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.git-status-badge {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 8px;
+    font-size: 11px;
+    opacity: 0.8;
+}
+
+.git-status-badge .codicon {
+    font-size: 12px;
+}
+
+.git-status-badge.linked {
+    color: var(--vscode-testing-iconPassed);
+}
+
+.git-status-badge.not-linked {
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.4;
+}
+
+.git-branch-text {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
+
+/* Context Menu (appears on hover/click) */
+.database-item .actions {
+    display: none;
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    background-color: var(--vscode-sideBar-background);
+    padding: 2px;
+    gap: 2px;
+    border-radius: 2px;
+}
+
+.database-item:hover .actions {
+    display: flex;
+}
+
+.action-icon-btn {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--vscode-foreground);
+    opacity: 0.7;
+    border-radius: 2px;
+}
+
+.action-icon-btn:hover {
+    opacity: 1;
+    background-color: var(--vscode-toolbar-hoverBackground);
+}
+
+.action-icon-btn .codicon {
+    font-size: 14px;
+}
+
+/* Codicon font */
+@font-face {
+    font-family: 'codicon';
+    src: url('https://microsoft.github.io/vscode-codicons/dist/codicon.ttf') format('truetype');
+}
+
+.codicon {
+    font-family: 'codicon';
+    font-style: normal;
+    font-weight: normal;
+    font-variant: normal;
+    text-decoration: none;
+    text-rendering: auto;
+    text-align: center;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    user-select: none;
+    -webkit-user-select: none;
+    -ms-user-select: none;
+}
+
+.codicon-refresh:before { content: "\ea72"; }
+.codicon-git-branch:before { content: "\ea68"; }
+.codicon-sync:before { content: "\ea77"; }
+.codicon-link:before { content: "\eb15"; }
+.codicon-link-external:before { content: "\eb16"; }
+.codicon-folder-opened:before { content: "\ea83"; }
+.codicon-circle-filled:before { content: "\eb1f"; }
+.codicon-circle-outline:before { content: "\eb20"; }
+.codicon-check:before { content: "\eab2"; }
+.codicon-close:before { content: "\ea76"; }
+.codicon-chevron-right:before { content: "\eab6"; }
+.codicon-server:before { content: "\eb50"; }
+.codicon-database:before { content: "\eb1c"; }
+.codicon-pass-filled:before { content: "\ebb3"; }
+.codicon-circle-slash:before { content: "\eabc"; }
+
